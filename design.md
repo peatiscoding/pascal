@@ -1,0 +1,288 @@
+# PASCAL — Design Specification
+
+## Overview
+
+PASCAL (Personal Assistant for Statistics, Context, Actions & Logging) is a local-network server for personal event logging, statistics aggregation, and dashboards. Single-user, no auth.
+
+## Tech Stack
+
+| Layer | Choice |
+|---|---|
+| Language | Go |
+| HTTP/Router | `net/http` + `chi` |
+| SQLite | `modernc.org/sqlite` (pure Go, no CGO) |
+| WebSocket | `nhooyr.io/websocket` |
+| Discord | `discordgo` |
+| Ollama | `net/http` (raw HTTP to `localhost:11434`) |
+| Frontend | Pure HTML/JS/CSS, embedded via `go:embed` |
+| Migrations | Raw SQL files, embedded via `go:embed` |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Clients
+        MCP[MCP Client]
+        Web[Web UI]
+        Bot[Discord Bot]
+    end
+
+    subgraph Server["API Server (Go)"]
+        Structured["/api/records\n(Structured)"]
+        Unstructured["/api/ingest/text\n(Unstructured)"]
+        WS["/ws\n(WebSocket)"]
+    end
+
+    subgraph Storage
+        PascalDB[(pascal.db\nSQLite)]
+        QueueDB[(queue.db\nSQLite)]
+    end
+
+    subgraph Worker["Queue Worker (single goroutine)"]
+        Poll[Poll 500ms]
+        Infer[Ollama Inference]
+    end
+
+    Ollama[Ollama LLM]
+
+    %% Structured path — direct write
+    MCP -->|POST| Structured
+    Web -->|POST/GET| Structured
+    Structured -->|direct write| PascalDB
+
+    %% Unstructured path — queued
+    Bot -->|POST| Unstructured
+    Unstructured -->|enqueue, 202| QueueDB
+
+    %% Worker processes queue
+    QueueDB -->|pending jobs| Poll
+    Poll --> Infer
+    Infer -->|prompt + text| Ollama
+    Ollama -->|structured JSON| Infer
+    Infer -->|insert record| PascalDB
+    Infer -->|mark done| QueueDB
+
+    %% Real-time updates
+    PascalDB -.->|broadcast| WS
+    WS -.->|events| Web
+    Web -->|fetch data| Structured
+```
+
+### Two Ingestion Paths
+
+- **Structured** (MCP, Web UI) → validate → write directly to `pascal.db`
+- **Unstructured** (Discord bot, other bots) → enqueue in `queue.db` → 202 instant → single worker picks up → Ollama infers → write to `pascal.db` → WS broadcast
+
+### Discord Bot
+
+Separate binary (`cmd/bot`). Calls ingestion API over HTTP. Independent lifecycle from server — bot crash doesn't affect API or dashboard.
+
+### WebSocket
+
+Lightweight event notification: `{ "type": "record:created", "id": "..." }`. Client fetches updated data via REST. No query logic in WS handler.
+
+## Database
+
+### Storage Files
+
+| File | Purpose | Lifecycle |
+|---|---|---|
+| `pascal.db` | All application data | Permanent, backed up |
+| `queue.db` | Ingestion queue | Ephemeral, can `rm` safely |
+
+Both use WAL mode. Separate files avoid WAL contention between high-churn queue writes and steady application writes.
+
+### Schema
+
+```sql
+-- Scope hierarchy for autocomplete and validation
+CREATE TABLE scope (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    parent_id INTEGER REFERENCES scope(id),
+    UNIQUE(name, parent_id)
+);
+
+-- Tag definitions (hierarchical)
+CREATE TABLE tag (
+    t TEXT PRIMARY KEY,
+    p TEXT REFERENCES tag(t),       -- parent tag
+    d TEXT NOT NULL                  -- description
+);
+
+-- Value type registry (THB, TOKEN, etc.)
+CREATE TABLE master_value (
+    k TEXT PRIMARY KEY,             -- key
+    d TEXT NOT NULL                  -- description
+);
+
+-- Recipe templates
+CREATE TABLE recipe (
+    u TEXT PRIMARY KEY,             -- usecase key
+    d TEXT NOT NULL                  -- description
+);
+
+-- Recipe ↔ MasterValue mapping (for MCP interpretation)
+CREATE TABLE recipe_values (
+    recipe_u TEXT NOT NULL REFERENCES recipe(u) ON DELETE CASCADE,
+    master_key TEXT NOT NULL REFERENCES master_value(k),
+    required INTEGER NOT NULL DEFAULT 1,  -- 1=required, 0=optional
+    PRIMARY KEY (recipe_u, master_key)
+);
+
+-- Recipe ↔ Tag mapping (for MCP interpretation)
+CREATE TABLE recipe_tags (
+    recipe_u TEXT NOT NULL REFERENCES recipe(u) ON DELETE CASCADE,
+    tag TEXT NOT NULL REFERENCES tag(t),
+    required INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (recipe_u, tag)
+);
+
+-- Main record
+CREATE TABLE record (
+    id BLOB PRIMARY KEY,            -- UUIDv7, 16 bytes
+    tl TEXT NOT NULL,               -- title
+    dt TEXT,                        -- detail
+    st INTEGER NOT NULL DEFAULT 1,  -- 0=paused, 1=todo, 2=doing, 3=done
+    ct TEXT NOT NULL DEFAULT (datetime('now')),  -- created at
+    sc TEXT NOT NULL,               -- scope (materialized path: "Work|ProjectX|Epic1")
+    cg TEXT NOT NULL,               -- category
+    r TEXT REFERENCES recipe(u)     -- recipe (nullable FK)
+);
+
+-- Record ↔ Tag junction
+CREATE TABLE record_tags (
+    record_id BLOB NOT NULL REFERENCES record(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL REFERENCES tag(t),
+    PRIMARY KEY (record_id, tag)
+);
+
+-- Aggregatable values per record (immutable, set once)
+CREATE TABLE record_values (
+    id BLOB NOT NULL REFERENCES record(id) ON DELETE CASCADE,
+    k TEXT NOT NULL REFERENCES master_value(k),
+    v REAL NOT NULL,
+    PRIMARY KEY (id, k)
+);
+
+-- Status change audit log
+CREATE TABLE record_log (
+    id BLOB NOT NULL REFERENCES record(id) ON DELETE CASCADE,
+    sst INTEGER NOT NULL,           -- switched status to
+    inf TEXT NOT NULL DEFAULT '',    -- additional info
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Indexes
+CREATE INDEX idx_scope_parent ON scope(parent_id);
+CREATE INDEX idx_record_ct ON record(ct);
+CREATE INDEX idx_record_cg ON record(cg);
+CREATE INDEX idx_record_st ON record(st);
+CREATE INDEX idx_record_sc ON record(sc);
+CREATE INDEX idx_record_tags_tag ON record_tags(tag);
+CREATE INDEX idx_record_values_k ON record_values(id, k);
+CREATE INDEX idx_record_log_id_at ON record_log(id, at);
+```
+
+### Queue Schema (queue.db)
+
+```sql
+CREATE TABLE ingest_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    payload TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | processing | done | failed
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    processed_at TEXT
+);
+
+CREATE INDEX idx_queue_status ON ingest_queue(status, created_at);
+```
+
+### Queue Worker Rules
+
+- Single goroutine, polls every 500ms
+- Backpressure: reject with 429 if queue depth > 1000
+- 3 retry attempts, then mark `failed`
+- Idempotent writes: check UUIDv7 before insert (crash between pascal.db write and queue.db update → worker retries → no duplicate)
+
+### Future Enhancement: DuckDB
+
+Not day one. When dashboard aggregation queries feel slow, add DuckDB as read-only analytics layer. Zero migration — DuckDB reads SQLite files directly via `ATTACH 'pascal.db' (TYPE sqlite)`.
+
+## API
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/ingest/text` | Unstructured text → queue → Ollama → record |
+| POST | `/api/records` | Create structured record |
+| PATCH | `/api/records/:id` | Update record (status change → record_log) |
+| GET | `/api/records` | Query with filters (tags, category, scope, date range) |
+| GET | `/api/stats` | Aggregations (count/sum/min/max/avg by dimension) |
+| GET | `/api/tags` | Tag tree |
+| GET | `/api/recipes` | List recipes |
+| GET | `/api/scopes` | Scope tree (for autocomplete) |
+| WS | `/ws` | Real-time dashboard events |
+
+## Ollama Integration
+
+- POST to `localhost:11434/api/generate` with schema definition + user text
+- Model: configurable, default `llama3.2:3b`
+- Output: structured JSON matching record shape
+- Validate before DB write — LLM output is untrusted input
+
+## Migrations
+
+- Raw SQL files: `migrations/001_init.sql`, `002_*.sql`, ...
+- Embedded in binary via `go:embed`
+- Applied in order on startup
+- `_migrations` table tracks applied versions
+
+## Project Structure
+
+```
+pascal/
+├── cmd/
+│   ├── server/main.go       # API server + queue worker
+│   └── bot/main.go          # Discord bot
+├── internal/
+│   ├── db/
+│   │   ├── db.go            # Open, migrate, WAL setup
+│   │   ├── record.go        # Record CRUD
+│   │   ├── stats.go         # Aggregation queries
+│   │   └── queue.go         # Queue operations (queue.db)
+│   ├── api/
+│   │   ├── router.go        # Route definitions
+│   │   ├── records.go       # Record handlers
+│   │   ├── stats.go         # Stats handlers
+│   │   └── ingest.go        # Ingestion handlers
+│   ├── worker/
+│   │   └── worker.go        # Queue poller + Ollama
+│   ├── ollama/
+│   │   └── client.go        # Ollama HTTP client
+│   └── ws/
+│       └── hub.go           # WebSocket hub + broadcast
+├── migrations/
+│   └── 001_init.sql
+├── web/
+│   ├── index.html
+│   ├── app.js
+│   └── style.css
+├── pascal.db
+├── queue.db
+├── .env
+├── go.mod
+└── Makefile
+```
+
+## Build Order
+
+1. DB schema + migrations
+2. Structured ingestion API (CRUD)
+3. Query/stats endpoints
+4. Web dashboard
+5. Ollama integration + queue worker
+6. Discord bot
+7. WebSocket real-time

@@ -1,0 +1,42 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+PASCAL (Personal Assistant for Statistics, Context, Actions & Logging) — local-network Go server for personal event logging, stats aggregation, and dashboards. Single-user, no auth.
+
+## Architecture
+
+- **API Server** (`cmd/server`) — Go binary: HTTP API + queue worker goroutine + WebSocket hub + embedded static files
+- **Discord Bot** (`cmd/bot`) — Separate Go binary, calls server API over HTTP
+- **Two SQLite files:** `pascal.db` (permanent data), `queue.db` (ephemeral ingestion queue)
+- **Two ingestion paths:** Structured (direct DB write), Unstructured (queue → Ollama → DB)
+- **Frontend:** Pure HTML/JS/CSS, no frameworks, served via `go:embed`
+
+## Tech Stack
+
+- Go with `chi` router, `modernc.org/sqlite` (pure Go, no CGO), `nhooyr.io/websocket`, `discordgo`
+- Ollama for LLM inference (unstructured text → structured records)
+- Raw SQL migrations embedded via `go:embed`, applied on startup
+
+## Data Model
+
+Short field names throughout. UUIDv7 as `BLOB(16)` for record IDs. Key tables:
+
+- `record` — main entity (title, detail, status, scope as materialized path, category)
+- `record_tags` — junction table (record ↔ tag)
+- `record_values` — numeric values per record (immutable, set once)
+- `record_log` — status change audit trail
+- `scope` — hierarchy master table for autocomplete/validation
+- `tag` — hierarchical tags (self-referential parent FK)
+- `master_value` — value type registry (THB, TOKEN, etc.)
+- `recipe` — templates with `recipe_values` and `recipe_tags` for MCP interpretation
+- `ingest_queue` (in queue.db) — pending unstructured text for Ollama processing
+
+Deletion strategy: `ON DELETE CASCADE` everywhere, no soft delete.
+
+## Design Documents
+
+- `design.md` — Full design specification (schema DDL, API, architecture diagram, queue design)
+- `analysis.md` — Architecture analysis with decision rationale
