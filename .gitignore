@@ -1,0 +1,9 @@
+pascal.db
+pascal.db-wal
+pascal.db-shm
+queue.db
+queue.db-wal
+queue.db-shm
+pascal-server
+pascal-bot
+.env
