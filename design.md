@@ -25,11 +25,13 @@ flowchart LR
         MCP[MCP Client]
         Web[Web UI]
         Bot[Discord Bot]
+        ExtWH[External Source\ne.g. Gmail webhook]
     end
 
     subgraph Server["API Server (Go)"]
         Structured["/api/records\n(Structured)"]
         Unstructured["/api/ingest/text\n(Unstructured)"]
+        Webhook["/api/webhook/:id"]
         WS["/ws\n(WebSocket)"]
     end
 
@@ -54,6 +56,11 @@ flowchart LR
     Bot -->|POST| Unstructured
     Unstructured -->|enqueue, 202| QueueDB
 
+    %% Webhook path — pattern match or queue
+    ExtWH -->|POST| Webhook
+    Webhook -->|has pattern: direct write| PascalDB
+    Webhook -->|no pattern: enqueue| QueueDB
+
     %% Worker processes queue
     QueueDB -->|pending jobs| Poll
     Poll --> Infer
@@ -68,10 +75,9 @@ flowchart LR
     Web -->|fetch data| Structured
 ```
 
-### Two Ingestion Paths
+### Ingestion
 
-- **Structured** (MCP, Web UI) → validate → write directly to `pascal.db`
-- **Unstructured** (Discord bot, other bots) → enqueue in `queue.db` → 202 instant → single worker picks up → Ollama infers → write to `pascal.db` → WS broadcast
+Three paths: Structured (direct write), Generic Webhook (pattern extract or Ollama queue), Google Calendar (push sync). See **[ingestion.md](ingestion.md)** for full design.
 
 ### Discord Bot
 
@@ -138,6 +144,31 @@ CREATE TABLE recipe_tags (
     PRIMARY KEY (recipe_u, tag)
 );
 
+-- Webhook endpoints (see ingestion.md for processing modes)
+CREATE TABLE webhook (
+    id TEXT PRIMARY KEY,                        -- slug, used in URL: /api/webhook/:id
+    d TEXT NOT NULL,                             -- description
+    secret TEXT NOT NULL,                        -- auth token (X-Webhook-Secret header)
+    pattern TEXT,                                -- regex with named groups (text payloads)
+    field_map TEXT,                              -- JSON: JSONPath mappings (JSON payloads)
+    recipe_u TEXT REFERENCES recipe(u),          -- optional recipe binding
+    active INTEGER NOT NULL DEFAULT 1
+);
+
+-- Google Calendar sync config (see ingestion.md for push flow)
+CREATE TABLE gcal_sync (
+    id TEXT PRIMARY KEY,
+    calendar_id TEXT NOT NULL,                   -- Google Calendar ID
+    channel_id TEXT,                             -- watch channel ID
+    channel_token TEXT,                          -- verification token
+    resource_id TEXT,                            -- Google resource ID
+    expiration TEXT,                             -- watch expiration (needs renewal)
+    scope TEXT NOT NULL,                         -- default scope for synced records
+    category TEXT NOT NULL,                      -- default category
+    recipe_u TEXT REFERENCES recipe(u),
+    active INTEGER NOT NULL DEFAULT 1
+);
+
 -- Main record
 CREATE TABLE record (
     id BLOB PRIMARY KEY,            -- UUIDv7, 16 bytes
@@ -190,8 +221,9 @@ CREATE INDEX idx_record_log_id_at ON record_log(id, at);
 CREATE TABLE ingest_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     payload TEXT NOT NULL,
-    source TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',  -- pending | processing | done | failed
+    source TEXT NOT NULL,                       -- 'discord', 'webhook:cc_kbank', 'api', etc.
+    recipe_hint TEXT,                            -- optional recipe_u for Ollama context
+    status TEXT NOT NULL DEFAULT 'pending',      -- pending | processing | done | failed
     attempts INTEGER NOT NULL DEFAULT 0,
     error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -216,15 +248,23 @@ Not day one. When dashboard aggregation queries feel slow, add DuckDB as read-on
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/ingest/text` | Unstructured text → queue → Ollama → record |
-| POST | `/api/records` | Create structured record |
-| PATCH | `/api/records/:id` | Update record (status change → record_log) |
-| GET | `/api/records` | Query with filters (tags, category, scope, date range) |
-| GET | `/api/stats` | Aggregations (count/sum/min/max/avg by dimension) |
-| GET | `/api/tags` | Tag tree |
-| GET | `/api/recipes` | List recipes |
-| GET | `/api/scopes` | Scope tree (for autocomplete) |
-| WS | `/ws` | Real-time dashboard events |
+| Method | Path | Network | Purpose |
+|---|---|---|---|
+| POST | `/api/webhook/:id` | Public | Generic webhook (pattern/field_map/Ollama) |
+| POST | `/api/gcal/push` | Public | Google Calendar push notification receiver |
+| POST | `/api/gcal/setup` | Tailscale | Register calendar watch channel |
+| GET | `/api/gcal/sync/:id` | Tailscale | Manual trigger full calendar sync |
+| POST | `/api/ingest/text` | Tailscale | Unstructured text → queue → Ollama |
+| POST | `/api/records` | Tailscale | Create structured record |
+| PATCH | `/api/records/:id` | Tailscale | Update record (status → record_log) |
+| GET | `/api/records` | Tailscale | Query with filters |
+| GET | `/api/stats` | Tailscale | Aggregations |
+| GET | `/api/tags` | Tailscale | Tag tree |
+| GET | `/api/recipes` | Tailscale | List recipes |
+| GET | `/api/scopes` | Tailscale | Scope tree (autocomplete) |
+| WS | `/ws` | Tailscale | Real-time dashboard events |
+
+See **[ingestion.md](ingestion.md)** for detailed webhook/gcal/queue processing flows.
 
 ## Ollama Integration
 
@@ -284,5 +324,7 @@ pascal/
 3. Query/stats endpoints
 4. Web dashboard
 5. Ollama integration + queue worker
-6. Discord bot
-7. WebSocket real-time
+6. Generic webhooks (pattern + field_map)
+7. Discord bot
+8. WebSocket real-time
+9. Google Calendar sync

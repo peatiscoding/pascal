@@ -7,12 +7,13 @@ Local-network server for personal event logging and statistics. Collects events,
 ## Components
 
 1. **API Server** (Go) — HTTP + WebSocket server, serves web UI via `go:embed`
-2. **Ingestion** — Two paths:
-   - **Structured API** — used by MCP interface and web UI, writes directly to DB
-   - **Unstructured API** — used by Discord bot and other bots, queued and processed via Ollama
+2. **Ingestion** — Three paths (see [ingestion.md](ingestion.md)):
+   - **Structured API** — MCP + web UI, direct DB write
+   - **Generic Webhooks** — external sources (Gmail, bank alerts), pattern/field_map extract or Ollama fallback
+   - **Google Calendar Sync** — push notifications, two-way sync with calendar events
 3. **Web Dashboard** — Pure HTML/JS/CSS, real-time updates via WebSocket
-4. **Discord Bot** — Separate binary, communicates via ingestion API. `@pascal` to create records
-5. **Queue Worker** — Goroutine in server process, polls `queue.db`, runs Ollama inference
+4. **Discord Bot** — Separate binary, calls `/api/ingest/text`
+5. **Queue Worker** — Goroutine, polls `queue.db`, runs Ollama inference
 
 ## Tech Stack
 
@@ -79,6 +80,31 @@ CREATE TABLE recipe_tags (
     PRIMARY KEY (recipe_u, tag)
 );
 
+-- Webhook endpoints (see ingestion.md for processing modes)
+CREATE TABLE webhook (
+    id TEXT PRIMARY KEY,                        -- slug for URL: /api/webhook/:id
+    d TEXT NOT NULL,                             -- description
+    secret TEXT NOT NULL,                        -- per-webhook auth token
+    pattern TEXT,                                -- regex with named groups (text payloads)
+    field_map TEXT,                              -- JSON: JSONPath mappings (JSON payloads)
+    recipe_u TEXT REFERENCES recipe(u),          -- optional recipe binding
+    active INTEGER NOT NULL DEFAULT 1
+);
+
+-- Google Calendar sync config
+CREATE TABLE gcal_sync (
+    id TEXT PRIMARY KEY,
+    calendar_id TEXT NOT NULL,
+    channel_id TEXT,
+    channel_token TEXT,
+    resource_id TEXT,
+    expiration TEXT,
+    scope TEXT NOT NULL,                         -- default scope for synced records
+    category TEXT NOT NULL,                      -- default category
+    recipe_u TEXT REFERENCES recipe(u),
+    active INTEGER NOT NULL DEFAULT 1
+);
+
 -- Main record
 CREATE TABLE record (
     id BLOB PRIMARY KEY,            -- UUIDv7, 16 bytes
@@ -124,17 +150,21 @@ CREATE TABLE record_log (
 
 ## API
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/ingest/text` | Unstructured text → queue → Ollama → record |
-| POST | `/api/records` | Create structured record |
-| PATCH | `/api/records/:id` | Update record (status → record_log) |
-| GET | `/api/records` | Query with filters |
-| GET | `/api/stats` | Aggregations |
-| GET | `/api/tags` | Tag tree |
-| GET | `/api/recipes` | List recipes |
-| GET | `/api/scopes` | Scope tree (autocomplete) |
-| WS | `/ws` | Real-time events |
+| Method | Path | Network | Purpose |
+|---|---|---|---|
+| POST | `/api/webhook/:id` | Public | Generic webhook (pattern/field_map/Ollama) |
+| POST | `/api/gcal/push` | Public | Google Calendar push receiver |
+| POST | `/api/gcal/setup` | Tailscale | Register calendar watch |
+| GET | `/api/gcal/sync/:id` | Tailscale | Manual calendar sync |
+| POST | `/api/ingest/text` | Tailscale | Unstructured text → queue → Ollama |
+| POST | `/api/records` | Tailscale | Create structured record |
+| PATCH | `/api/records/:id` | Tailscale | Update record (status → record_log) |
+| GET | `/api/records` | Tailscale | Query with filters |
+| GET | `/api/stats` | Tailscale | Aggregations |
+| GET | `/api/tags` | Tailscale | Tag tree |
+| GET | `/api/recipes` | Tailscale | List recipes |
+| GET | `/api/scopes` | Tailscale | Scope tree (autocomplete) |
+| WS | `/ws` | Tailscale | Real-time events |
 
 ## Project Structure
 

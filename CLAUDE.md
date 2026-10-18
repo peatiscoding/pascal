@@ -11,12 +11,12 @@ PASCAL (Personal Assistant for Statistics, Context, Actions & Logging) — local
 - **API Server** (`cmd/server`) — Go binary: HTTP API + queue worker goroutine + WebSocket hub + embedded static files
 - **Discord Bot** (`cmd/bot`) — Separate Go binary, calls server API over HTTP
 - **Two SQLite files:** `pascal.db` (permanent data), `queue.db` (ephemeral ingestion queue)
-- **Two ingestion paths:** Structured (direct DB write), Unstructured (queue → Ollama → DB)
+- **Three ingestion paths:** Structured (direct DB write), Generic Webhooks (pattern/field_map/Ollama), Google Calendar sync (push notifications)
 - **Frontend:** Pure HTML/JS/CSS, no frameworks, served via `go:embed`
 
 ## Tech Stack
 
-- Go with `chi` router, `modernc.org/sqlite` (pure Go, no CGO), `nhooyr.io/websocket`, `discordgo`
+- Go with `chi` router, `modernc.org/sqlite` (pure Go, no CGO), `coder/websocket`, `discordgo`
 - Ollama for LLM inference (unstructured text → structured records)
 - Raw SQL migrations embedded via `go:embed`, applied on startup
 
@@ -32,11 +32,16 @@ Short field names throughout. UUIDv7 as `BLOB(16)` for record IDs. Key tables:
 - `tag` — hierarchical tags (self-referential parent FK)
 - `master_value` — value type registry (THB, TOKEN, etc.)
 - `recipe` — templates with `recipe_values` and `recipe_tags` for MCP interpretation
+- `webhook` — configurable ingestion endpoints (pattern, field_map, optional recipe binding)
+- `gcal_sync` — Google Calendar watch channel config
 - `ingest_queue` (in queue.db) — pending unstructured text for Ollama processing
 
 Deletion strategy: `ON DELETE CASCADE` everywhere, no soft delete.
 
+Network: VPS with public endpoints (webhooks, gcal push) + Tailscale for everything else.
+
 ## Design Documents
 
 - `design.md` — Full design specification (schema DDL, API, architecture diagram, queue design)
+- `ingestion.md` — Ingestion system design (webhooks, gcal sync, queue, network topology)
 - `analysis.md` — Architecture analysis with decision rationale

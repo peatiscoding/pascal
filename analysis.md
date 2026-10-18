@@ -119,11 +119,13 @@ flowchart LR
         MCP[MCP Client]
         Web[Web UI]
         Bot[Discord Bot]
+        ExtWH[External Source\ne.g. Gmail webhook]
     end
 
-    subgraph Server["API Server (Hono)"]
+    subgraph Server["API Server (Go)"]
         Structured["/api/records\n(Structured)"]
         Unstructured["/api/ingest/text\n(Unstructured)"]
+        Webhook["/api/webhook/:id"]
         WS["/ws\n(WebSocket)"]
     end
 
@@ -148,6 +150,11 @@ flowchart LR
     Bot -->|POST| Unstructured
     Unstructured -->|enqueue, 202| QueueDB
 
+    %% Webhook path — pattern match or queue
+    ExtWH -->|POST| Webhook
+    Webhook -->|has pattern: direct write| PascalDB
+    Webhook -->|no pattern: enqueue| QueueDB
+
     %% Worker processes queue
     QueueDB -->|pending jobs| Poll
     Poll --> Infer
@@ -162,9 +169,10 @@ flowchart LR
     Web -->|fetch data| Structured
 ```
 
-**Two paths:**
+**Three paths:**
 - **Structured** (MCP, Web UI) → validate → write directly to `pascal.db`
 - **Unstructured** (Discord bot, other bots) → enqueue in `queue.db` → 202 instant → worker picks up → Ollama infers → write to `pascal.db` → WS broadcast
+- **Webhook** (external sources: Gmail, bank alerts) → if has pattern: regex extract → direct write; if no pattern: queue to Ollama (optionally with recipe context)
 
 ### 3.1 Tech Stack Decision
 
@@ -222,62 +230,17 @@ Don't push full query results over WS. Instead:
 
 Alternative: if dashboard is simple enough, push the denormalized record directly. Decide based on dashboard complexity.
 
-### 3.5 Ingestion Queue
+### 3.5 Ingestion System
 
-Unstructured ingestion via Ollama is slow (1-5s per inference). Single human user wouldn't cause bottleneck, but **bot-to-bot traffic** (Discord bots forwarding alerts, automated logs, scraped data) can burst 10s-100s of messages at machine speed. Queue needed.
+Full ingestion design — queue, webhooks, Google Calendar sync — in **[ingestion.md](ingestion.md)**.
 
-**Design: SQLite-backed queue in separate file (`queue.db`)** — no new dependency, isolated from main data.
-
-```sql
-CREATE TABLE ingest_queue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    payload TEXT NOT NULL,         -- raw text
-    source TEXT NOT NULL,          -- 'discord', 'api', etc.
-    status TEXT DEFAULT 'pending', -- pending | processing | done | failed
-    attempts INTEGER DEFAULT 0,
-    error TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    processed_at TEXT
-);
-
-CREATE INDEX idx_queue_status ON ingest_queue(status, created_at);
-```
-
-**Processing flow:**
-```
-Incoming text → INSERT into queue → respond "queued" (instant)
-
-Worker (single, polling 500ms):
-  SELECT ... WHERE status='pending' ORDER BY created_at LIMIT 1
-  → UPDATE status='processing'
-  → Ollama inference
-  → INSERT structured record to DB
-  → UPDATE status='done'
-  → broadcast WS event
-
-On failure:
-  → attempts++
-  → if attempts < 3: status='pending' (retry)
-  → else: status='failed', store error
-```
-
-**Key decisions:**
-- **Single worker** — Ollama handles 1 inference at a time well; parallelism just makes each slower
-- **500ms poll interval** — responsive enough, not wasteful
-- **Backpressure** — if queue depth > 1000, reject with 429 to prevent unbounded growth
-- **3 retries** — Ollama flakes happen; more than 3 = real problem
-- **Dead letter** — `status='failed'` stays in table for manual review/requeue
-- **SQLite over Redis/BullMQ** — same engine, no extra service to run
-- **Separate file (`queue.db`)** — queue is ephemeral, main data is permanent; different lifecycles = different files. Easy reset (`rm queue.db`), no WAL contention with main DB, `VACUUM` only hits queue churn, backups skip queue noise. Trade-off: no cross-DB transaction, but solvable — insert record to `pascal.db` first, then mark queue done; if crash between → worker retries → idempotent via UUIDv7 check
-
-### 3.6 Ollama Integration
-
-Prompt engineering matters here. Need to:
-1. Send schema definition + user text to Ollama
-2. Get back structured JSON matching `Record` shape
-3. Validate output before DB write (LLM output is untrusted input)
-
-Model choice: `llama3.2:3b` or similar small model — fast inference, good enough for structured extraction. Keep model name configurable.
+**Key decisions documented there:**
+- SQLite-backed queue in separate file (`queue.db`) — ephemeral, no WAL contention, `rm` to reset
+- Single worker goroutine, 500ms poll, 3 retries, backpressure at 1000
+- Webhook as independent entity from recipe (many webhooks can share one recipe)
+- Three webhook modes: pattern (regex), field_map (JSONPath), or Ollama fallback
+- Google Calendar push sync — separate from generic webhooks (headers-only payload, needs API callback, OAuth, watch renewal)
+- Network split: webhook + gcal push endpoints public (VPS), everything else Tailscale only
 
 ## 4. Query Patterns vs Schema Fitness
 
