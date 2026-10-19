@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"pascal/internal/api"
@@ -17,10 +18,18 @@ import (
 
 func main() {
 	addr := envOr("PASCAL_ADDR", ":7600")
-	dbPath := envOr("PASCAL_DB", "pascal.db")
-	queuePath := envOr("PASCAL_QUEUE_DB", "queue.db")
+	dbPath := envOr("PASCAL_DB", "runtime/pascal.db")
+	queuePath := envOr("PASCAL_QUEUE_DB", "runtime/queue.db")
 	ollamaURL := envOr("OLLAMA_URL", "http://localhost:11434")
 	ollamaModel := envOr("OLLAMA_MODEL", "llama3.2:3b")
+
+	// Ensure runtime directory exists
+	if dir := filepath.Dir(dbPath); dir != "." {
+		os.MkdirAll(dir, 0o755)
+	}
+	if dir := filepath.Dir(queuePath); dir != "." {
+		os.MkdirAll(dir, 0o755)
+	}
 
 	// Open main database
 	mainDB, err := db.Open(dbPath)

@@ -15,7 +15,8 @@ run: build
 	./pascal-bot
 
 clean:
-	rm -f pascal-server pascal-bot pascal.db queue.db
+	rm -f pascal-server pascal-bot
+	rm -rf runtime/
 
 tidy:
 	go mod tidy

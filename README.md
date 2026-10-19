@@ -13,7 +13,7 @@ Local-network server for personal event logging and statistics. Collects events,
    - **Google Calendar Sync** — push notifications, two-way sync with calendar events
 3. **Web Dashboard** — Pure HTML/JS/CSS, real-time updates via WebSocket
 4. **Discord Bot** — Separate binary, calls `/api/ingest/text`
-5. **Queue Worker** — Goroutine, polls `queue.db`, runs Ollama inference
+5. **Queue Worker** — Goroutine, polls `runtime/queue.db`, runs Ollama inference
 
 ## Tech Stack
 
@@ -31,8 +31,8 @@ Local-network server for personal event logging and statistics. Collects events,
 
 Two SQLite files:
 
-- `pascal.db` — all application data (permanent, backed up)
-- `queue.db` — ingestion queue (ephemeral, safe to delete)
+- `runtime/pascal.db` — all application data (permanent, backed up)
+- `runtime/queue.db` — ingestion queue (ephemeral, safe to delete)
 
 ### Schema
 
@@ -112,6 +112,7 @@ CREATE TABLE record (
     dt TEXT,                        -- detail
     st INTEGER NOT NULL DEFAULT 1,  -- 0=paused, 1=todo, 2=doing, 3=done
     ct TEXT NOT NULL DEFAULT (datetime('now')),
+    due TEXT,                       -- due date (ISO 8601, nullable)
     sc TEXT NOT NULL,               -- scope (materialized path, pipe-delimited)
     cg TEXT NOT NULL,               -- category
     r TEXT REFERENCES recipe(u)     -- nullable

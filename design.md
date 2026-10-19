@@ -36,8 +36,8 @@ flowchart LR
     end
 
     subgraph Storage
-        PascalDB[(pascal.db\nSQLite)]
-        QueueDB[(queue.db\nSQLite)]
+        PascalDB[(runtime/pascal.db\nSQLite)]
+        QueueDB[(runtime/queue.db\nSQLite)]
     end
 
     subgraph Worker["Queue Worker (single goroutine)"]
@@ -93,8 +93,8 @@ Lightweight event notification: `{ "type": "record:created", "id": "..." }`. Cli
 
 | File | Purpose | Lifecycle |
 |---|---|---|
-| `pascal.db` | All application data | Permanent, backed up |
-| `queue.db` | Ingestion queue | Ephemeral, can `rm` safely |
+| `runtime/pascal.db` | All application data | Permanent, backed up |
+| `runtime/queue.db` | Ingestion queue | Ephemeral, can `rm` safely |
 
 Both use WAL mode. Separate files avoid WAL contention between high-churn queue writes and steady application writes.
 
@@ -176,6 +176,7 @@ CREATE TABLE record (
     dt TEXT,                        -- detail
     st INTEGER NOT NULL DEFAULT 1,  -- 0=paused, 1=todo, 2=doing, 3=done
     ct TEXT NOT NULL DEFAULT (datetime('now')),  -- created at
+    due TEXT,                       -- due date (ISO 8601, nullable)
     sc TEXT NOT NULL,               -- scope (materialized path: "Work|ProjectX|Epic1")
     cg TEXT NOT NULL,               -- category
     r TEXT REFERENCES recipe(u)     -- recipe (nullable FK)
@@ -210,12 +211,13 @@ CREATE INDEX idx_record_ct ON record(ct);
 CREATE INDEX idx_record_cg ON record(cg);
 CREATE INDEX idx_record_st ON record(st);
 CREATE INDEX idx_record_sc ON record(sc);
+CREATE INDEX idx_record_due ON record(due);
 CREATE INDEX idx_record_tags_tag ON record_tags(tag);
 CREATE INDEX idx_record_values_k ON record_values(id, k);
 CREATE INDEX idx_record_log_id_at ON record_log(id, at);
 ```
 
-### Queue Schema (queue.db)
+### Queue Schema (runtime/queue.db)
 
 ```sql
 CREATE TABLE ingest_queue (
@@ -238,11 +240,11 @@ CREATE INDEX idx_queue_status ON ingest_queue(status, created_at);
 - Single goroutine, polls every 500ms
 - Backpressure: reject with 429 if queue depth > 1000
 - 3 retry attempts, then mark `failed`
-- Idempotent writes: check UUIDv7 before insert (crash between pascal.db write and queue.db update → worker retries → no duplicate)
+- Idempotent writes: check UUIDv7 before insert (crash between runtime/pascal.db write and runtime/queue.db update → worker retries → no duplicate)
 
 ### Future Enhancement: DuckDB
 
-Not day one. When dashboard aggregation queries feel slow, add DuckDB as read-only analytics layer. Zero migration — DuckDB reads SQLite files directly via `ATTACH 'pascal.db' (TYPE sqlite)`.
+Not day one. When dashboard aggregation queries feel slow, add DuckDB as read-only analytics layer. Zero migration — DuckDB reads SQLite files directly via `ATTACH 'runtime/pascal.db' (TYPE sqlite)`.
 
 ## API
 
@@ -292,7 +294,7 @@ pascal/
 │   │   ├── db.go            # Open, migrate, WAL setup
 │   │   ├── record.go        # Record CRUD
 │   │   ├── stats.go         # Aggregation queries
-│   │   └── queue.go         # Queue operations (queue.db)
+│   │   └── queue.go         # Queue operations (runtime/queue.db)
 │   ├── api/
 │   │   ├── router.go        # Route definitions
 │   │   ├── records.go       # Record handlers
@@ -310,8 +312,9 @@ pascal/
 │   ├── index.html
 │   ├── app.js
 │   └── style.css
-├── pascal.db
-├── queue.db
+├── runtime/
+│   ├── pascal.db
+│   └── queue.db
 ├── .env
 ├── go.mod
 └── Makefile

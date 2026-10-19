@@ -1,6 +1,6 @@
 # PASCAL — Ingestion Design
 
-Three ingestion paths into `pascal.db`. Each optimized for different source types.
+Three ingestion paths into `runtime/pascal.db`. Each optimized for different source types.
 
 ## Overview
 
@@ -25,13 +25,13 @@ flowchart TB
 
     subgraph Processing
         Direct[Direct Write]
-        Queue[(queue.db)]
+        Queue[(runtime/queue.db)]
         Worker[Queue Worker]
         Ollama[Ollama LLM]
         CalAPI[Calendar API\nevents.get]
     end
 
-    PascalDB[(pascal.db)]
+    PascalDB[(runtime/pascal.db)]
     WSHub[WebSocket Broadcast]
 
     MCP --> Structured
@@ -229,7 +229,7 @@ flowchart TD
     State -->|created| Create[Create record\nscope + category from gcal_sync defaults]
     State -->|updated| Update[Update record\ntitle, time, status]
     State -->|deleted/cancelled| Done[Set record status → done]
-    Create --> PascalDB[(pascal.db)]
+    Create --> PascalDB[(runtime/pascal.db)]
     Update --> PascalDB
     Done --> PascalDB
     PascalDB -.-> WS[WebSocket broadcast]
@@ -279,7 +279,7 @@ Google Calendar watch channels expire (~7 days). Server needs periodic renewal:
 
 Shared by unstructured API (`/api/ingest/text`) and pattern-less webhooks.
 
-### Queue Schema (queue.db — separate file)
+### Queue Schema (runtime/queue.db — separate file)
 
 ```sql
 CREATE TABLE ingest_queue (
@@ -304,7 +304,7 @@ CREATE INDEX idx_queue_status ON ingest_queue(status, created_at);
 - 3 retry attempts, then mark `failed` (dead letter)
 - Idempotent writes via UUIDv7 check (crash recovery)
 - If `recipe_hint` set: include recipe description + required values/tags in Ollama prompt
-- Separate DB file (`queue.db`): ephemeral, no WAL contention with main DB, `rm queue.db` to reset
+- Separate DB file (`runtime/queue.db`): ephemeral, no WAL contention with main DB, `rm runtime/queue.db` to reset
 
 ### Ollama Prompt Strategy
 

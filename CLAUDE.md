@@ -10,7 +10,7 @@ PASCAL (Personal Assistant for Statistics, Context, Actions & Logging) — local
 
 - **API Server** (`cmd/server`) — Go binary: HTTP API + queue worker goroutine + WebSocket hub + embedded static files
 - **Discord Bot** (`cmd/bot`) — Separate Go binary, calls server API over HTTP
-- **Two SQLite files:** `pascal.db` (permanent data), `queue.db` (ephemeral ingestion queue)
+- **Two SQLite files:** `runtime/pascal.db` (permanent data), `runtime/queue.db` (ephemeral ingestion queue)
 - **Three ingestion paths:** Structured (direct DB write), Generic Webhooks (pattern/field_map/Ollama), Google Calendar sync (push notifications)
 - **Frontend:** Pure HTML/JS/CSS, no frameworks, served via `go:embed`
 
@@ -34,7 +34,7 @@ Short field names throughout. UUIDv7 as `BLOB(16)` for record IDs. Key tables:
 - `recipe` — templates with `recipe_values` and `recipe_tags` for MCP interpretation
 - `webhook` — configurable ingestion endpoints (pattern, field_map, optional recipe binding)
 - `gcal_sync` — Google Calendar watch channel config
-- `ingest_queue` (in queue.db) — pending unstructured text for Ollama processing
+- `ingest_queue` (in runtime/queue.db) — pending unstructured text for Ollama processing
 
 Deletion strategy: `ON DELETE CASCADE` everywhere, no soft delete.
 

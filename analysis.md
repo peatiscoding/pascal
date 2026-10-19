@@ -14,7 +14,7 @@ Single-user, local-network only. No auth needed (trusted network). Ollama depend
 - All writes go to SQLite (fast single-row inserts, audit log, CRUD operations)
 - Dashboard/stats queries go through DuckDB, which can read SQLite files directly via its SQLite scanner:
   ```sql
-  ATTACH 'pascal.db' AS pascal (TYPE sqlite);
+  ATTACH 'runtime/pascal.db' AS pascal (TYPE sqlite);
   SELECT cg, COUNT(*), AVG(v)
   FROM pascal.Record
   JOIN pascal.RecordValues USING(id)
@@ -89,7 +89,11 @@ CREATE INDEX idx_record_tags_tag ON record_tags(tag);
 
 **Decision:** Values are immutable (set once at record creation). No timestamp needed.
 
-#### 2.7 `Recipe.v` and `Recipe.t` → separate tables
+#### 2.7 `Record.due` — due date for deadlines
+
+**Decision:** Add `due TEXT` (ISO 8601, nullable) to record table. Enables meeting prep use case: questions scoped under `Meetings|<name>` with `due` set to meeting start time. Also useful for any time-bound task. Overdue query: `WHERE st < 3 AND due < datetime('now')`. Indexed.
+
+#### 2.8 `Recipe.v` and `Recipe.t` → separate tables
 
 **Decision:** Separate tables. MCP uses this structure to interpret which values/tags are required vs optional for a given recipe. Needs to be queryable, not buried in JSON.
 
@@ -130,8 +134,8 @@ flowchart LR
     end
 
     subgraph Storage
-        PascalDB[(pascal.db\nSQLite)]
-        QueueDB[(queue.db\nSQLite)]
+        PascalDB[(runtime/pascal.db\nSQLite)]
+        QueueDB[(runtime/queue.db\nSQLite)]
     end
 
     subgraph Worker["Queue Worker (single)"]
@@ -170,8 +174,8 @@ flowchart LR
 ```
 
 **Three paths:**
-- **Structured** (MCP, Web UI) → validate → write directly to `pascal.db`
-- **Unstructured** (Discord bot, other bots) → enqueue in `queue.db` → 202 instant → worker picks up → Ollama infers → write to `pascal.db` → WS broadcast
+- **Structured** (MCP, Web UI) → validate → write directly to `runtime/pascal.db`
+- **Unstructured** (Discord bot, other bots) → enqueue in `runtime/queue.db` → 202 instant → worker picks up → Ollama infers → write to `runtime/pascal.db` → WS broadcast
 - **Webhook** (external sources: Gmail, bank alerts) → if has pattern: regex extract → direct write; if no pattern: queue to Ollama (optionally with recipe context)
 
 ### 3.1 Tech Stack Decision
@@ -235,7 +239,7 @@ Alternative: if dashboard is simple enough, push the denormalized record directl
 Full ingestion design — queue, webhooks, Google Calendar sync — in **[ingestion.md](ingestion.md)**.
 
 **Key decisions documented there:**
-- SQLite-backed queue in separate file (`queue.db`) — ephemeral, no WAL contention, `rm` to reset
+- SQLite-backed queue in separate file (`runtime/queue.db`) — ephemeral, no WAL contention, `rm` to reset
 - Single worker goroutine, 500ms poll, 3 retries, backpressure at 1000
 - Webhook as independent entity from recipe (many webhooks can share one recipe)
 - Three webhook modes: pattern (regex), field_map (JSONPath), or Ollama fallback
@@ -311,8 +315,9 @@ pascal/
 │   ├── index.html           # Embedded via go:embed
 │   ├── app.js
 │   └── style.css
-├── pascal.db                 # Main data (gitignored)
-├── queue.db                  # Ingestion queue (gitignored)
+├── runtime/                  # Data files (gitignored)
+│   ├── pascal.db             # Main data
+│   └── queue.db              # Ingestion queue
 ├── .env                      # Secrets (gitignored)
 ├── go.mod
 └── Makefile
