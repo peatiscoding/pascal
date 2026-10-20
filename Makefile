@@ -1,3 +1,6 @@
+-include runtime/.env
+export
+
 .PHONY: build run server bot web dev clean
 
 build:
