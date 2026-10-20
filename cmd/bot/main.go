@@ -10,9 +10,12 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
+
+var botStartTime = time.Now()
 
 func main() {
 	token := os.Getenv("DISCORD_TOKEN")
@@ -60,6 +63,23 @@ func main() {
 		log.Fatalf("discord open: %v", err)
 	}
 	defer dg.Close()
+
+	// Health endpoint
+	healthAddr := envOr("PASCAL_BOT_HEALTH_ADDR", ":7602")
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			fmt.Fprintf(w, `{"status":"ok","uptime_sec":%d}`, int(time.Since(botStartTime).Seconds()))
+		})
+		log.Printf("pascal bot health on %s", healthAddr)
+		http.ListenAndServe(healthAddr, mux)
+	}()
 
 	log.Println("pascal bot running")
 

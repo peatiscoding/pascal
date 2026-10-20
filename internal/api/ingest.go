@@ -82,36 +82,6 @@ func (s *Server) listTags(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tags)
 }
 
-func (s *Server) listRecipes(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.mainDB.Query(`SELECT u, d FROM recipe ORDER BY u`)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	type recipe struct {
-		Usecase     string `json:"u"`
-		Description string `json:"d"`
-	}
-
-	var recipes []recipe
-	for rows.Next() {
-		var rc recipe
-		if err := rows.Scan(&rc.Usecase, &rc.Description); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		recipes = append(recipes, rc)
-	}
-	if err := rows.Err(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(recipes)
-}
 
 func (s *Server) listScopes(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.mainDB.Query(`SELECT id, name, parent_id FROM scope ORDER BY id`)
