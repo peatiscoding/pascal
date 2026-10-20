@@ -15,6 +15,7 @@ function route() {
     if (hash === '#recipes') return renderRecipes();
     if (hash === '#recipes/new') return renderRecipeForm(null);
     if (hash.startsWith('#recipes/edit/')) return renderRecipeForm(decodeURIComponent(hash.slice('#recipes/edit/'.length)));
+    if (hash === '#master') return renderMaster();
 
     renderDashboard();
 }
@@ -296,6 +297,252 @@ async function deleteRecipe(u) {
     } catch (e) {
         alert('Error: ' + e.message);
     }
+}
+
+// --- Master Data ---
+
+async function renderMaster() {
+    app.innerHTML = `
+        <h2 style="margin-bottom:1rem">Master Data</h2>
+        <div class="master-tabs">
+            <button class="tab-btn active" onclick="switchMasterTab('values')">Values</button>
+            <button class="tab-btn" onclick="switchMasterTab('tags')">Tags</button>
+            <button class="tab-btn" onclick="switchMasterTab('scopes')">Scopes</button>
+        </div>
+        <div id="master-content">Loading...</div>
+    `;
+    renderMasterValues();
+}
+
+function switchMasterTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+    if (tab === 'values') renderMasterValues();
+    else if (tab === 'tags') renderMasterTags();
+    else if (tab === 'scopes') renderMasterScopes();
+}
+
+// --- Master Values tab ---
+
+async function renderMasterValues() {
+    const el = document.getElementById('master-content');
+    el.innerHTML = 'Loading...';
+    try {
+        const values = await api('/api/master-values');
+        el.innerHTML = `
+            <div class="toolbar" style="margin-top:1rem">
+                <span>${(values || []).length} value type(s)</span>
+                <button class="btn btn-primary btn-sm" onclick="showMasterValueForm()">+ Add</button>
+            </div>
+            <div id="mv-form-slot"></div>
+            <table>
+                <thead><tr><th>Key</th><th>Description</th><th></th></tr></thead>
+                <tbody>
+                    ${(values || []).map(v => `
+                        <tr>
+                            <td><strong>${esc(v.k)}</strong></td>
+                            <td>${esc(v.d)}</td>
+                            <td style="text-align:right">
+                                <button class="btn btn-secondary btn-sm" onclick="showMasterValueForm('${esc(v.k)}','${esc(v.d)}')">Edit</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteMasterValue('${esc(v.k)}')">Delete</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    } catch (e) {
+        el.innerHTML = `<p class="empty">Error: ${esc(e.message)}</p>`;
+    }
+}
+
+function showMasterValueForm(key, desc) {
+    const isEdit = key != null;
+    document.getElementById('mv-form-slot').innerHTML = `
+        <form class="inline-form" onsubmit="saveMasterValue(event, ${isEdit})">
+            <input id="mv-k" value="${esc(key || '')}" placeholder="Key (e.g. THB)" ${isEdit ? 'disabled' : ''} required>
+            <input id="mv-d" value="${esc(desc || '')}" placeholder="Description" required style="flex:2">
+            <button type="submit" class="btn btn-primary btn-sm">${isEdit ? 'Save' : 'Add'}</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="this.closest('.inline-form').remove()">Cancel</button>
+        </form>
+    `;
+    document.getElementById(isEdit ? 'mv-d' : 'mv-k').focus();
+}
+
+async function saveMasterValue(e, isEdit) {
+    e.preventDefault();
+    const k = document.getElementById('mv-k').value.trim();
+    const d = document.getElementById('mv-d').value.trim();
+    if (!k || !d) return;
+    try {
+        if (isEdit) {
+            await api('/api/master-values/' + encodeURIComponent(k), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k, d }) });
+        } else {
+            await api('/api/master-values', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k, d }) });
+        }
+        _masterValues = null; // invalidate cache
+        renderMasterValues();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function deleteMasterValue(k) {
+    if (!confirm('Delete value type "' + k + '"?')) return;
+    try {
+        await api('/api/master-values/' + encodeURIComponent(k), { method: 'DELETE' });
+        _masterValues = null;
+        renderMasterValues();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+// --- Tags tab ---
+
+async function renderMasterTags() {
+    const el = document.getElementById('master-content');
+    el.innerHTML = 'Loading...';
+    try {
+        const tags = await api('/api/tags');
+        el.innerHTML = `
+            <div class="toolbar" style="margin-top:1rem">
+                <span>${(tags || []).length} tag(s)</span>
+                <button class="btn btn-primary btn-sm" onclick="showTagForm()">+ Add</button>
+            </div>
+            <div id="tag-form-slot"></div>
+            <table>
+                <thead><tr><th>Tag</th><th>Parent</th><th>Description</th><th></th></tr></thead>
+                <tbody>
+                    ${(tags || []).map(t => `
+                        <tr>
+                            <td><strong>${esc(t.t)}</strong></td>
+                            <td>${t.p ? esc(t.p) : '<span style="color:#ccc">—</span>'}</td>
+                            <td>${esc(t.d)}</td>
+                            <td style="text-align:right">
+                                <button class="btn btn-secondary btn-sm" onclick="showTagForm('${esc(t.t)}',${t.p ? `'${esc(t.p)}'` : 'null'},'${esc(t.d)}')">Edit</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteTagItem('${esc(t.t)}')">Delete</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    } catch (e) {
+        el.innerHTML = `<p class="empty">Error: ${esc(e.message)}</p>`;
+    }
+}
+
+function showTagForm(tag, parent, desc) {
+    const isEdit = tag != null;
+    document.getElementById('tag-form-slot').innerHTML = `
+        <form class="inline-form" onsubmit="saveTag(event, ${isEdit})">
+            <input id="tf-t" value="${esc(tag || '')}" placeholder="Tag key" ${isEdit ? 'disabled' : ''} required>
+            <input id="tf-p" value="${esc(parent || '')}" placeholder="Parent tag (optional)">
+            <input id="tf-d" value="${esc(desc || '')}" placeholder="Description" required style="flex:2">
+            <button type="submit" class="btn btn-primary btn-sm">${isEdit ? 'Save' : 'Add'}</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="this.closest('.inline-form').remove()">Cancel</button>
+        </form>
+    `;
+    document.getElementById(isEdit ? 'tf-d' : 'tf-t').focus();
+}
+
+async function saveTag(e, isEdit) {
+    e.preventDefault();
+    const t = document.getElementById('tf-t').value.trim();
+    const p = document.getElementById('tf-p').value.trim() || null;
+    const d = document.getElementById('tf-d').value.trim();
+    if (!t || !d) return;
+    try {
+        if (isEdit) {
+            await api('/api/tags/' + encodeURIComponent(t), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t, p, d }) });
+        } else {
+            await api('/api/tags', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t, p, d }) });
+        }
+        _tags = null;
+        renderMasterTags();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function deleteTagItem(t) {
+    if (!confirm('Delete tag "' + t + '"?')) return;
+    try {
+        await api('/api/tags/' + encodeURIComponent(t), { method: 'DELETE' });
+        _tags = null;
+        renderMasterTags();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+// --- Scopes tab ---
+
+async function renderMasterScopes() {
+    const el = document.getElementById('master-content');
+    el.innerHTML = 'Loading...';
+    try {
+        const scopes = await api('/api/scopes');
+        el.innerHTML = `
+            <div class="toolbar" style="margin-top:1rem">
+                <span>${(scopes || []).length} scope(s)</span>
+                <button class="btn btn-primary btn-sm" onclick="showScopeForm(null, ${JSON.stringify(scopes || []).replace(/"/g, '&quot;')})">+ Add</button>
+            </div>
+            <div id="scope-form-slot"></div>
+            <table>
+                <thead><tr><th>ID</th><th>Name</th><th>Parent</th><th></th></tr></thead>
+                <tbody>
+                    ${(scopes || []).map(s => {
+                        const parentName = s.parent_id ? (scopes.find(p => p.id === s.parent_id)?.name || s.parent_id) : '—';
+                        return `
+                        <tr>
+                            <td>${s.id}</td>
+                            <td><strong>${esc(s.name)}</strong></td>
+                            <td>${s.parent_id ? esc(String(parentName)) : '<span style="color:#ccc">—</span>'}</td>
+                            <td style="text-align:right">
+                                <button class="btn btn-secondary btn-sm" onclick='showScopeForm(${JSON.stringify(s)}, ${JSON.stringify(scopes || [])})'>Edit</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteScopeItem(${s.id})">Delete</button>
+                            </td>
+                        </tr>`;
+                    }).join('')}
+                </tbody>
+            </table>
+        `;
+    } catch (e) {
+        el.innerHTML = `<p class="empty">Error: ${esc(e.message)}</p>`;
+    }
+}
+
+function showScopeForm(scope, allScopes) {
+    const isEdit = scope != null;
+    const options = (allScopes || []).filter(s => !isEdit || s.id !== scope?.id)
+        .map(s => `<option value="${s.id}" ${isEdit && scope.parent_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+    document.getElementById('scope-form-slot').innerHTML = `
+        <form class="inline-form" onsubmit="saveScope(event, ${isEdit ? scope.id : 'null'})">
+            <input id="sf-name" value="${esc(scope?.name || '')}" placeholder="Scope name" required>
+            <select id="sf-parent"><option value="">No parent</option>${options}</select>
+            <button type="submit" class="btn btn-primary btn-sm">${isEdit ? 'Save' : 'Add'}</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="this.closest('.inline-form').remove()">Cancel</button>
+        </form>
+    `;
+    document.getElementById('sf-name').focus();
+}
+
+async function saveScope(e, id) {
+    e.preventDefault();
+    const name = document.getElementById('sf-name').value.trim();
+    const parentVal = document.getElementById('sf-parent').value;
+    const parent_id = parentVal ? parseInt(parentVal) : null;
+    if (!name) return;
+    try {
+        if (id != null) {
+            await api('/api/scopes/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parent_id }) });
+        } else {
+            await api('/api/scopes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parent_id }) });
+        }
+        renderMasterScopes();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function deleteScopeItem(id) {
+    if (!confirm('Delete scope #' + id + '?')) return;
+    try {
+        await api('/api/scopes/' + id, { method: 'DELETE' });
+        renderMasterScopes();
+    } catch (e) { alert('Error: ' + e.message); }
 }
 
 // --- WebSocket ---

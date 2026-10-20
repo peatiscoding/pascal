@@ -88,5 +88,22 @@ tr.clickable { cursor: pointer; }
 /* Badge */
 .badge { display: inline-block; background: #f0f0f0; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.75rem; color: #555; }
 
+/* Tabs */
+.master-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid #e0e0e0; margin-bottom: 1rem; }
+.tab-btn {
+    padding: 0.5rem 1rem; border: none; background: none; cursor: pointer;
+    font-size: 0.9rem; color: #888; border-bottom: 2px solid transparent;
+}
+.tab-btn:hover { color: #1a1a1a; }
+.tab-btn.active { color: #1a1a1a; border-bottom-color: #1a1a1a; font-weight: 500; }
+
+/* Inline form */
+.inline-form {
+    display: flex; gap: 0.5rem; align-items: center; padding: 0.75rem;
+    background: #f8f8f8; border-radius: 6px; margin-bottom: 0.5rem;
+}
+.inline-form input, .inline-form select { padding: 0.4rem 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; flex: 1; }
+.inline-form input:focus, .inline-form select:focus { outline: none; border-color: #1a1a1a; }
+
 /* Empty state */
 .empty { color: #888; text-align: center; padding: 3rem 1rem; }

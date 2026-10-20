@@ -51,8 +51,19 @@ func (s *Server) Router() *chi.Mux {
 		r.Get("/stats", s.getStats)
 
 		r.Get("/tags", s.listTags)
+		r.Post("/tags", s.createTag)
+		r.Put("/tags/{t}", s.updateTag)
+		r.Delete("/tags/{t}", s.deleteTag)
+
 		r.Get("/scopes", s.listScopes)
+		r.Post("/scopes", s.createScope)
+		r.Put("/scopes/{id}", s.updateScope)
+		r.Delete("/scopes/{id}", s.deleteScope)
+
 		r.Get("/master-values", s.listMasterValues)
+		r.Post("/master-values", s.createMasterValue)
+		r.Put("/master-values/{k}", s.updateMasterValue)
+		r.Delete("/master-values/{k}", s.deleteMasterValue)
 
 		r.Get("/recipes", s.listRecipesFull)
 		r.Get("/recipes/{u}", s.getRecipe)
