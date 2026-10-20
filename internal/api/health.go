@@ -1,8 +1,13 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -44,4 +49,45 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) mcpProbe(w http.ResponseWriter, r *http.Request) {
+	// Find MCP binary relative to executable
+	exe, _ := os.Executable()
+	mcpBin := filepath.Join(filepath.Dir(exe), "pascal-mcp")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, mcpBin)
+	cmd.Stdin = bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}` + "\n"))
+
+	out, err := cmd.Output()
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "error",
+			"error":  err.Error(),
+		})
+		return
+	}
+
+	// Verify valid JSON-RPC response
+	var resp map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(out), &resp); err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "error",
+			"error":  "invalid response: " + string(out),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":   "ok",
+		"response": resp,
+	})
 }

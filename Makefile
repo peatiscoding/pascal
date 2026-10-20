@@ -1,12 +1,14 @@
 -include runtime/.env
 export
 
-.PHONY: build run server bot web dev dev-detached dev-kill clean
+.PHONY: build run server bot web mcp dev dev-detached dev-kill clean
 
 build:
-	go build -o pascal-server ./cmd/server
-	go build -o pascal-bot ./cmd/bot
-	go build -o pascal-web ./cmd/web
+	@mkdir -p runtime
+	go build -o runtime/pascal-server ./cmd/server
+	go build -o runtime/pascal-bot ./cmd/bot
+	go build -o runtime/pascal-web ./cmd/web
+	go build -o runtime/pascal-mcp ./cmd/mcp
 
 server:
 	go run ./cmd/server
@@ -17,15 +19,17 @@ bot:
 web:
 	go run ./cmd/web
 
-dev: dev-kill
+mcp:
+	go run ./cmd/mcp
+
+dev: dev-kill build
 	@trap 'kill 0' EXIT; \
 	go run ./cmd/server & echo $$! > runtime/server.pid; \
 	go run ./cmd/bot & echo $$! > runtime/bot.pid; \
 	go run ./cmd/web & echo $$! > runtime/web.pid; \
 	wait
 
-dev-detached: dev-kill
-	@mkdir -p runtime
+dev-detached: dev-kill build
 	@go run ./cmd/server & echo $$! > runtime/server.pid
 	@go run ./cmd/bot & echo $$! > runtime/bot.pid
 	@go run ./cmd/web & echo $$! > runtime/web.pid
@@ -44,13 +48,12 @@ dev-kill:
 	@sleep 0.5
 
 run: build
-	./pascal-server &
-	./pascal-bot &
-	./pascal-web
+	./runtime/pascal-server &
+	./runtime/pascal-bot &
+	./runtime/pascal-web
 
 clean:
-	rm -f pascal-server pascal-bot pascal-web
-	rm -rf runtime/
+	rm -f runtime/pascal-server runtime/pascal-bot runtime/pascal-web runtime/pascal-mcp
 
 tidy:
 	go mod tidy

@@ -12,6 +12,7 @@ PASCAL (Personal Assistant for Statistics, Context, Actions & Logging) — local
 - **Discord Bot** (`cmd/bot`) — Separate Go binary, calls server API over HTTP
 - **Two SQLite files:** `runtime/pascal.db` (permanent data), `runtime/queue.db` (ephemeral ingestion queue)
 - **Three ingestion paths:** Structured (direct DB write), Generic Webhooks (pattern/field_map/Ollama), Google Calendar sync (push notifications)
+- **MCP Server** (`cmd/mcp`) — stdio JSON-RPC server for Claude Code integration, calls API server over HTTP
 - **Frontend:** Pure HTML/JS/CSS, no frameworks, served via `go:embed`
 
 ## Tech Stack
@@ -45,7 +46,7 @@ Network: VPS with public endpoints (webhooks, gcal push) + Tailscale for everyth
 - `make dev` — run all 3 servers (foreground, Ctrl-C kills all)
 - `make dev-detached` — run all 3 servers in background
 - `make dev-kill` — kill all servers (ports 7600, 7601, 7602)
-- `make server` / `make bot` / `make web` — run individual server
+- `make server` / `make bot` / `make web` / `make mcp` — run individual server
 - `make test` — run all tests
 - `make build` — compile binaries
 - `make tidy` — go mod tidy

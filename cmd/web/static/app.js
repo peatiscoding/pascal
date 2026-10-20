@@ -57,19 +57,22 @@ async function renderDashboard() {
             <div class="health-card" id="h-server"><h3>API Server</h3><span class="health-status loading">checking...</span></div>
             <div class="health-card" id="h-bot"><h3>Discord Bot</h3><span class="health-status loading">checking...</span></div>
             <div class="health-card" id="h-web"><h3>Web UI</h3><span class="health-status loading">checking...</span></div>
+            <div class="health-card" id="h-mcp"><h3>MCP Server</h3><span class="health-status loading">checking...</span></div>
         </div>
         <div class="stats-row" id="dash-stats"></div>
     `;
 
-    const [server, bot, web] = await Promise.all([
+    const [server, bot, web, mcp] = await Promise.all([
         healthCheck(API + '/api/health'),
         healthCheck(BOT_URL + '/health'),
         healthCheck('/health'),
+        healthCheck(API + '/api/mcp/probe'),
     ]);
 
     renderHealthCard('h-server', server);
     renderHealthCard('h-bot', bot);
     renderHealthCard('h-web', web);
+    renderHealthCard('h-mcp', mcp);
 
     // Stats from server health
     if (server.status !== 'down') {
@@ -611,6 +614,7 @@ async function updateStatusDots() {
         { id: 'dot-server', url: API + '/api/health' },
         { id: 'dot-bot', url: BOT_URL + '/health' },
         { id: 'dot-web', url: '/health' },
+        { id: 'dot-mcp', url: API + '/api/health' }, // MCP depends on API server
     ];
     await Promise.all(checks.map(async ({ id, url }) => {
         const dot = document.getElementById(id);

@@ -41,6 +41,7 @@ func (s *Server) Router() *chi.Mux {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", s.health)
+		r.Get("/mcp/probe", s.mcpProbe)
 
 		r.Post("/records", s.createRecord)
 		r.Get("/records", s.listRecords)
