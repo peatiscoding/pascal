@@ -6,14 +6,13 @@ import (
 )
 
 type Record struct {
-	ID       []byte  `json:"id"`
-	Title    string  `json:"tl"`
-	Detail   *string `json:"dt,omitempty"`
-	Status   int     `json:"st"`
-	Created  string  `json:"ct"`
-	Scope    string  `json:"sc"`
-	Category string  `json:"cg"`
-	Recipe   *string `json:"r,omitempty"`
+	ID      []byte  `json:"id"`
+	Title   string  `json:"tl"`
+	Detail  *string `json:"dt,omitempty"`
+	Status  int     `json:"st"`
+	Created string  `json:"ct"`
+	Scope   string  `json:"sc"`
+	Recipe  *string `json:"r,omitempty"`
 }
 
 type RecordValue struct {
@@ -27,6 +26,8 @@ type RecordFull struct {
 	Values []RecordValue `json:"values"`
 }
 
+// InsertRecord inserts a record with tags and values.
+// Enforces tag exclusivity: only one child tag per parent group.
 func InsertRecord(db *sql.DB, r *RecordFull) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -35,17 +36,15 @@ func InsertRecord(db *sql.DB, r *RecordFull) error {
 	defer tx.Rollback()
 
 	_, err = tx.Exec(
-		`INSERT INTO record (id, tl, dt, st, sc, cg, r) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		r.ID, r.Title, r.Detail, r.Status, r.Scope, r.Category, r.Recipe,
+		`INSERT INTO record (id, tl, dt, st, sc, r) VALUES (?, ?, ?, ?, ?, ?)`,
+		r.ID, r.Title, r.Detail, r.Status, r.Scope, r.Recipe,
 	)
 	if err != nil {
 		return fmt.Errorf("insert record: %w", err)
 	}
 
-	for _, tag := range r.Tags {
-		if _, err := tx.Exec(`INSERT INTO record_tags (record_id, tag) VALUES (?, ?)`, r.ID, tag); err != nil {
-			return fmt.Errorf("insert tag %s: %w", tag, err)
-		}
+	if err := insertTagsExclusive(tx, r.ID, r.Tags); err != nil {
+		return err
 	}
 
 	for _, v := range r.Values {
@@ -60,6 +59,29 @@ func InsertRecord(db *sql.DB, r *RecordFull) error {
 	}
 
 	return tx.Commit()
+}
+
+// insertTagsExclusive inserts tags enforcing: max one child per parent group.
+// Root tags (no parent) have no exclusivity constraint.
+func insertTagsExclusive(tx *sql.Tx, recordID []byte, tags []string) error {
+	parentSeen := map[string]string{} // parent -> tag already used
+	for _, tag := range tags {
+		var parent sql.NullString
+		err := tx.QueryRow(`SELECT p FROM tag WHERE t=?`, tag).Scan(&parent)
+		if err != nil {
+			return fmt.Errorf("lookup tag %s: %w", tag, err)
+		}
+		if parent.Valid {
+			if existing, ok := parentSeen[parent.String]; ok {
+				return fmt.Errorf("tag conflict: '%s' and '%s' share parent '%s' (only one allowed)", existing, tag, parent.String)
+			}
+			parentSeen[parent.String] = tag
+		}
+		if _, err := tx.Exec(`INSERT INTO record_tags (record_id, tag) VALUES (?, ?)`, recordID, tag); err != nil {
+			return fmt.Errorf("insert tag %s: %w", tag, err)
+		}
+	}
+	return nil
 }
 
 func UpdateRecordStatus(db *sql.DB, id []byte, status int, info string) error {
@@ -88,8 +110,8 @@ func UpdateRecordStatus(db *sql.DB, id []byte, status int, info string) error {
 func GetRecord(db *sql.DB, id []byte) (*RecordFull, error) {
 	r := &RecordFull{}
 	err := db.QueryRow(
-		`SELECT id, tl, dt, st, ct, sc, cg, r FROM record WHERE id=?`, id,
-	).Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Scope, &r.Category, &r.Recipe)
+		`SELECT id, tl, dt, st, ct, sc, r FROM record WHERE id=?`, id,
+	).Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Scope, &r.Recipe)
 	if err != nil {
 		return nil, err
 	}
@@ -124,18 +146,17 @@ func GetRecord(db *sql.DB, id []byte) (*RecordFull, error) {
 }
 
 type RecordFilter struct {
-	Scope    *string
-	Category *string
-	Status   *int
-	Tag      *string
-	From     *string
-	To       *string
-	Limit    int
-	Offset   int
+	Scope  *string
+	Status *int
+	Tag    *string
+	From   *string
+	To     *string
+	Limit  int
+	Offset int
 }
 
 func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
-	query := `SELECT DISTINCT r.id, r.tl, r.dt, r.st, r.ct, r.sc, r.cg, r.r FROM record r`
+	query := `SELECT DISTINCT r.id, r.tl, r.dt, r.st, r.ct, r.sc, r.r FROM record r`
 	var args []any
 	var where []string
 
@@ -147,10 +168,6 @@ func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
 	if f.Scope != nil {
 		where = append(where, "r.sc LIKE ?")
 		args = append(args, *f.Scope+"%")
-	}
-	if f.Category != nil {
-		where = append(where, "r.cg = ?")
-		args = append(args, *f.Category)
 	}
 	if f.Status != nil {
 		where = append(where, "r.st = ?")
@@ -185,7 +202,7 @@ func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
 	var records []RecordFull
 	for rows.Next() {
 		var r RecordFull
-		if err := rows.Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Scope, &r.Category, &r.Recipe); err != nil {
+		if err := rows.Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Scope, &r.Recipe); err != nil {
 			return nil, err
 		}
 		records = append(records, r)
@@ -243,6 +260,13 @@ func DeleteRecord(db *sql.DB, id []byte) error {
 		return fmt.Errorf("record not found")
 	}
 	return nil
+}
+
+// TagInUse returns true if the tag is referenced by any record.
+func TagInUse(db *sql.DB, tag string) (bool, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM record_tags WHERE tag=?`, tag).Scan(&count)
+	return count > 0, err
 }
 
 func joinAnd(clauses []string) string {

@@ -1,9 +1,12 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strconv"
+
+	"pascal/internal/db"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -103,6 +106,28 @@ func (s *Server) updateTag(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Check if parent is changing and tag is in use
+	var currentParent sql.NullString
+	if err := s.mainDB.QueryRow(`SELECT p FROM tag WHERE t=?`, t).Scan(&currentParent); err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	newParent := req.Parent
+	parentChanged := (currentParent.Valid != (newParent != nil)) ||
+		(currentParent.Valid && newParent != nil && currentParent.String != *newParent)
+	if parentChanged {
+		inUse, err := db.TagInUse(s.mainDB, t)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if inUse {
+			http.Error(w, "cannot change parent of tag in use by records", http.StatusConflict)
+			return
+		}
+	}
+
 	res, err := s.mainDB.Exec(`UPDATE tag SET p=?, d=? WHERE t=?`, req.Parent, req.Description, t)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

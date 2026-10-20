@@ -24,9 +24,6 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("scope"); v != "" {
 		f.Scope = &v
 	}
-	if v := q.Get("cg"); v != "" {
-		f.Category = &v
-	}
 	if v := q.Get("tag"); v != "" {
 		f.Tag = &v
 	}

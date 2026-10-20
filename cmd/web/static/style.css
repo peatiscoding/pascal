@@ -93,9 +93,11 @@ tr.clickable { cursor: pointer; }
 .tab-btn {
     padding: 0.5rem 1rem; border: none; background: none; cursor: pointer;
     font-size: 0.9rem; color: #888; border-bottom: 2px solid transparent;
+    text-decoration: none;
 }
 .tab-btn:hover { color: #1a1a1a; }
 .tab-btn.active { color: #1a1a1a; border-bottom-color: #1a1a1a; font-weight: 500; }
+.tab-desc { color: #888; font-size: 0.85rem; margin: 0.75rem 0; line-height: 1.4; }
 
 /* Inline form */
 .inline-form {
@@ -104,6 +106,26 @@ tr.clickable { cursor: pointer; }
 }
 .inline-form input, .inline-form select { padding: 0.4rem 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; flex: 1; }
 .inline-form input:focus, .inline-form select:focus { outline: none; border-color: #1a1a1a; }
+
+/* Scope tree */
+.scope-tree { margin-top: 0.5rem; }
+.tree-node { }
+.tree-row {
+    display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.5rem;
+    border-radius: 4px; transition: background 0.1s;
+}
+.tree-row:hover { background: #f4f4f4; }
+.tree-toggle { font-size: 0.75rem; color: #999; width: 1rem; text-align: center; flex-shrink: 0; }
+.tree-icon { font-size: 0.9rem; flex-shrink: 0; }
+.tree-label { font-weight: 500; }
+.tree-path { flex: 1; }
+.tree-path-text { font-size: 0.75rem; color: #aaa; font-family: monospace; }
+.tree-actions { display: flex; gap: 0.25rem; opacity: 0; transition: opacity 0.15s; }
+.tree-row:hover .tree-actions { opacity: 1; }
+.tree-children { }
+.tree-inline-form { margin-left: 1.5rem; }
+.tree-form-slot:empty { display: none; }
+#scope-root-form { margin-bottom: 0.5rem; }
 
 /* Empty state */
 .empty { color: #888; text-align: center; padding: 3rem 1rem; }

@@ -15,14 +15,13 @@ import (
 )
 
 type createRecordRequest struct {
-	Title    string           `json:"tl"`
-	Detail   *string          `json:"dt,omitempty"`
-	Status   int              `json:"st"`
-	Scope    string           `json:"sc"`
-	Category string           `json:"cg"`
-	Recipe   *string          `json:"r,omitempty"`
-	Tags     []string         `json:"tags"`
-	Values   []db.RecordValue `json:"values"`
+	Title  string           `json:"tl"`
+	Detail *string          `json:"dt,omitempty"`
+	Status int              `json:"st"`
+	Scope  string           `json:"sc"`
+	Recipe *string          `json:"r,omitempty"`
+	Tags   []string         `json:"tags"`
+	Values []db.RecordValue `json:"values"`
 }
 
 func (s *Server) createRecord(w http.ResponseWriter, r *http.Request) {
@@ -32,8 +31,8 @@ func (s *Server) createRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Title == "" || req.Scope == "" || req.Category == "" {
-		http.Error(w, "tl, sc, cg required", http.StatusBadRequest)
+	if req.Title == "" || req.Scope == "" {
+		http.Error(w, "tl and sc required", http.StatusBadRequest)
 		return
 	}
 
@@ -46,13 +45,12 @@ func (s *Server) createRecord(w http.ResponseWriter, r *http.Request) {
 
 	rec := &db.RecordFull{
 		Record: db.Record{
-			ID:       idBytes,
-			Title:    req.Title,
-			Detail:   req.Detail,
-			Status:   req.Status,
-			Scope:    req.Scope,
-			Category: req.Category,
-			Recipe:   req.Recipe,
+			ID:     idBytes,
+			Title:  req.Title,
+			Detail: req.Detail,
+			Status: req.Status,
+			Scope:  req.Scope,
+			Recipe: req.Recipe,
 		},
 		Tags:   req.Tags,
 		Values: req.Values,
@@ -99,9 +97,6 @@ func (s *Server) listRecords(w http.ResponseWriter, r *http.Request) {
 
 	if v := q.Get("scope"); v != "" {
 		f.Scope = &v
-	}
-	if v := q.Get("cg"); v != "" {
-		f.Category = &v
 	}
 	if v := q.Get("st"); v != "" {
 		st, err := strconv.Atoi(v)

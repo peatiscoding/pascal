@@ -107,13 +107,12 @@ func (w *Worker) processNext() {
 }
 
 type ollamaRecord struct {
-	Title    string             `json:"tl"`
-	Detail   *string            `json:"dt,omitempty"`
-	Status   int                `json:"st"`
-	Scope    string             `json:"sc"`
-	Category string             `json:"cg"`
-	Tags     []string           `json:"tags"`
-	Values   []db.RecordValue   `json:"values"`
+	Title  string           `json:"tl"`
+	Detail *string          `json:"dt,omitempty"`
+	Status int              `json:"st"`
+	Scope  string           `json:"sc"`
+	Tags   []string         `json:"tags"`
+	Values []db.RecordValue `json:"values"`
 }
 
 func parseResponse(resp string) (*db.RecordFull, error) {
@@ -128,9 +127,6 @@ func parseResponse(resp string) (*db.RecordFull, error) {
 	if parsed.Scope == "" {
 		return nil, fmt.Errorf("missing scope in ollama response")
 	}
-	if parsed.Category == "" {
-		return nil, fmt.Errorf("missing category in ollama response")
-	}
 
 	id, err := uuid.NewV7()
 	if err != nil {
@@ -140,12 +136,11 @@ func parseResponse(resp string) (*db.RecordFull, error) {
 
 	return &db.RecordFull{
 		Record: db.Record{
-			ID:       idBytes,
-			Title:    parsed.Title,
-			Detail:   parsed.Detail,
-			Status:   parsed.Status,
-			Scope:    parsed.Scope,
-			Category: parsed.Category,
+			ID:     idBytes,
+			Title:  parsed.Title,
+			Detail: parsed.Detail,
+			Status: parsed.Status,
+			Scope:  parsed.Scope,
 		},
 		Tags:   parsed.Tags,
 		Values: parsed.Values,

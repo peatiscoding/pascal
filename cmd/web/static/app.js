@@ -15,7 +15,10 @@ function route() {
     if (hash === '#recipes') return renderRecipes();
     if (hash === '#recipes/new') return renderRecipeForm(null);
     if (hash.startsWith('#recipes/edit/')) return renderRecipeForm(decodeURIComponent(hash.slice('#recipes/edit/'.length)));
-    if (hash === '#master') return renderMaster();
+    if (hash === '#master') return renderMaster('values');
+    if (hash === '#master/values') return renderMaster('values');
+    if (hash === '#master/tags') return renderMaster('tags');
+    if (hash === '#master/scopes') return renderMaster('scopes');
 
     renderDashboard();
 }
@@ -111,7 +114,7 @@ async function renderRecords() {
             <div class="record">
                 <strong>${esc(r.tl)}</strong>
                 <span class="scope">${esc(r.sc)}</span>
-                <span class="category">${esc(r.cg)}</span>
+                ${(r.tags || []).map(t => `<span class="badge">${esc(t)}</span>`).join(' ')}
             </div>
         `).join('');
     } catch (e) {
@@ -301,22 +304,18 @@ async function deleteRecipe(u) {
 
 // --- Master Data ---
 
-async function renderMaster() {
+async function renderMaster(tab) {
+    tab = tab || 'values';
     app.innerHTML = `
-        <h2 style="margin-bottom:1rem">Master Data</h2>
+        <h2 style="margin-bottom:0.5rem">Master Data</h2>
+        <p style="color:#888;font-size:0.85rem;margin-bottom:1rem">Reference tables used by recipes and records. <strong>Values</strong> for aggregation, <strong>Tags</strong> for filtering and classification, <strong>Scopes</strong> for organizational hierarchy.</p>
         <div class="master-tabs">
-            <button class="tab-btn active" onclick="switchMasterTab('values')">Values</button>
-            <button class="tab-btn" onclick="switchMasterTab('tags')">Tags</button>
-            <button class="tab-btn" onclick="switchMasterTab('scopes')">Scopes</button>
+            <a href="#master/values" class="tab-btn ${tab === 'values' ? 'active' : ''}">Values</a>
+            <a href="#master/tags" class="tab-btn ${tab === 'tags' ? 'active' : ''}">Tags</a>
+            <a href="#master/scopes" class="tab-btn ${tab === 'scopes' ? 'active' : ''}">Scopes</a>
         </div>
         <div id="master-content">Loading...</div>
     `;
-    renderMasterValues();
-}
-
-function switchMasterTab(tab) {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    event.target.classList.add('active');
     if (tab === 'values') renderMasterValues();
     else if (tab === 'tags') renderMasterTags();
     else if (tab === 'scopes') renderMasterScopes();
@@ -330,6 +329,7 @@ async function renderMasterValues() {
     try {
         const values = await api('/api/master-values');
         el.innerHTML = `
+            <p class="tab-desc">Values define numeric types attached to records (e.g. THB, calories, tokens). Used for <strong>aggregation</strong> — summing, averaging, and charting over time.</p>
             <div class="toolbar" style="margin-top:1rem">
                 <span>${(values || []).length} value type(s)</span>
                 <button class="btn btn-primary btn-sm" onclick="showMasterValueForm()">+ Add</button>
@@ -402,6 +402,7 @@ async function renderMasterTags() {
     try {
         const tags = await api('/api/tags');
         el.innerHTML = `
+            <p class="tab-desc">Tags serve dual purpose: <strong>filtering</strong> and <strong>classification</strong>. Root tags (no parent) attach freely — a record can have many. Child tags (with parent) are <strong>exclusive</strong> — only one per parent group per record, acting as categories (e.g. parent "type" → children "expense"/"workout" — pick one).</p>
             <div class="toolbar" style="margin-top:1rem">
                 <span>${(tags || []).length} tag(s)</span>
                 <button class="btn btn-primary btn-sm" onclick="showTagForm()">+ Add</button>
@@ -469,67 +470,96 @@ async function deleteTagItem(t) {
     } catch (e) { alert('Error: ' + e.message); }
 }
 
-// --- Scopes tab ---
+// --- Scopes tab (tree UI) ---
+
+let _scopesData = [];
 
 async function renderMasterScopes() {
     const el = document.getElementById('master-content');
     el.innerHTML = 'Loading...';
     try {
-        const scopes = await api('/api/scopes');
+        _scopesData = await api('/api/scopes') || [];
         el.innerHTML = `
+            <p class="tab-desc">Scopes define the organizational hierarchy. Each record has exactly <strong>one</strong> scope — used for <strong>classification</strong>, grouping, and pie charts (e.g. Work|ProjectX, Personal|Health).</p>
             <div class="toolbar" style="margin-top:1rem">
-                <span>${(scopes || []).length} scope(s)</span>
-                <button class="btn btn-primary btn-sm" onclick="showScopeForm(null, ${JSON.stringify(scopes || []).replace(/"/g, '&quot;')})">+ Add</button>
+                <span>${_scopesData.length} scope(s)</span>
+                <button class="btn btn-primary btn-sm" onclick="showScopeForm(null, null)">+ Add Root</button>
             </div>
-            <div id="scope-form-slot"></div>
-            <table>
-                <thead><tr><th>ID</th><th>Name</th><th>Parent</th><th></th></tr></thead>
-                <tbody>
-                    ${(scopes || []).map(s => {
-                        const parentName = s.parent_id ? (scopes.find(p => p.id === s.parent_id)?.name || s.parent_id) : '—';
-                        return `
-                        <tr>
-                            <td>${s.id}</td>
-                            <td><strong>${esc(s.name)}</strong></td>
-                            <td>${s.parent_id ? esc(String(parentName)) : '<span style="color:#ccc">—</span>'}</td>
-                            <td style="text-align:right">
-                                <button class="btn btn-secondary btn-sm" onclick='showScopeForm(${JSON.stringify(s)}, ${JSON.stringify(scopes || [])})'>Edit</button>
-                                <button class="btn btn-danger btn-sm" onclick="deleteScopeItem(${s.id})">Delete</button>
-                            </td>
-                        </tr>`;
-                    }).join('')}
-                </tbody>
-            </table>
+            <div id="scope-tree" class="scope-tree">${buildScopeTree(_scopesData, null, 0)}</div>
         `;
     } catch (e) {
         el.innerHTML = `<p class="empty">Error: ${esc(e.message)}</p>`;
     }
 }
 
-function showScopeForm(scope, allScopes) {
-    const isEdit = scope != null;
-    const options = (allScopes || []).filter(s => !isEdit || s.id !== scope?.id)
-        .map(s => `<option value="${s.id}" ${isEdit && scope.parent_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
-    document.getElementById('scope-form-slot').innerHTML = `
-        <form class="inline-form" onsubmit="saveScope(event, ${isEdit ? scope.id : 'null'})">
-            <input id="sf-name" value="${esc(scope?.name || '')}" placeholder="Scope name" required>
-            <select id="sf-parent"><option value="">No parent</option>${options}</select>
+function buildScopeTree(scopes, parentId, depth) {
+    const children = scopes.filter(s => (s.parent_id ?? null) === parentId);
+    if (children.length === 0 && depth > 0) return '';
+    return children.map(s => {
+        const childHtml = buildScopeTree(scopes, s.id, depth + 1);
+        const hasChildren = scopes.some(c => (c.parent_id ?? null) === s.id);
+        return `
+            <div class="tree-node" data-id="${s.id}">
+                <div class="tree-row" style="padding-left:${depth * 1.5}rem">
+                    <span class="tree-toggle">${hasChildren ? '▾' : '<span style="visibility:hidden">▾</span>'}</span>
+                    <span class="tree-icon">${hasChildren ? '📁' : '📄'}</span>
+                    <span class="tree-label">${esc(s.name)}</span>
+                    <span class="tree-path">${buildScopePath(scopes, s)}</span>
+                    <span class="tree-actions">
+                        <button class="btn btn-secondary btn-sm" onclick="showScopeForm(${s.id}, ${s.parent_id ?? 'null'}, '${esc(s.name)}')">Edit</button>
+                        <button class="btn btn-primary btn-sm" onclick="showScopeForm(null, ${s.id})">+ Child</button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteScopeItem(${s.id}, '${esc(s.name)}')">Delete</button>
+                    </span>
+                </div>
+                <div class="tree-form-slot" id="scope-form-${s.id}"></div>
+                <div class="tree-children">${childHtml}</div>
+            </div>`;
+    }).join('');
+}
+
+function buildScopePath(scopes, node) {
+    const parts = [];
+    let current = node;
+    while (current) {
+        parts.unshift(current.name);
+        current = scopes.find(s => s.id === current.parent_id);
+    }
+    return parts.length > 1 ? `<span class="tree-path-text">${parts.map(esc).join(' | ')}</span>` : '';
+}
+
+function showScopeForm(editId, parentId, name) {
+    // Clear any existing scope forms
+    document.querySelectorAll('.tree-form-slot').forEach(s => s.innerHTML = '');
+
+    const isEdit = editId != null;
+    const slotId = isEdit ? `scope-form-${editId}` : (parentId != null ? `scope-form-${parentId}` : null);
+
+    const formHtml = `
+        <form class="inline-form tree-inline-form" onsubmit="saveScope(event, ${isEdit ? editId : 'null'}, ${parentId ?? 'null'})">
+            <input id="sf-name" value="${esc(name || '')}" placeholder="${isEdit ? 'Rename scope' : 'New scope name'}" required>
             <button type="submit" class="btn btn-primary btn-sm">${isEdit ? 'Save' : 'Add'}</button>
             <button type="button" class="btn btn-secondary btn-sm" onclick="this.closest('.inline-form').remove()">Cancel</button>
         </form>
     `;
+
+    if (slotId) {
+        const slot = document.getElementById(slotId);
+        if (slot) { slot.innerHTML = formHtml; document.getElementById('sf-name').focus(); return; }
+    }
+    // Root-level add — insert before tree
+    const tree = document.getElementById('scope-tree');
+    tree.insertAdjacentHTML('beforebegin', `<div id="scope-root-form">${formHtml}</div>`);
     document.getElementById('sf-name').focus();
 }
 
-async function saveScope(e, id) {
+async function saveScope(e, id, parentId) {
     e.preventDefault();
     const name = document.getElementById('sf-name').value.trim();
-    const parentVal = document.getElementById('sf-parent').value;
-    const parent_id = parentVal ? parseInt(parentVal) : null;
     if (!name) return;
+    const parent_id = parentId;
     try {
         if (id != null) {
-            await api('/api/scopes/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parent_id }) });
+            await api('/api/scopes/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parent_id: _scopesData.find(s => s.id === id)?.parent_id ?? null }) });
         } else {
             await api('/api/scopes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parent_id }) });
         }
@@ -537,8 +567,8 @@ async function saveScope(e, id) {
     } catch (e) { alert('Error: ' + e.message); }
 }
 
-async function deleteScopeItem(id) {
-    if (!confirm('Delete scope #' + id + '?')) return;
+async function deleteScopeItem(id, name) {
+    if (!confirm('Delete scope "' + name + '" and all children?')) return;
     try {
         await api('/api/scopes/' + id, { method: 'DELETE' });
         renderMasterScopes();

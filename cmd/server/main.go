@@ -38,7 +38,7 @@ func main() {
 	}
 	defer mainDB.Close()
 
-	if err := db.Migrate(mainDB, "001_init.sql"); err != nil {
+	if err := db.Migrate(mainDB, "001_init.sql", "003_drop_cg.sql"); err != nil {
 		log.Fatalf("migrate main db: %v", err)
 	}
 

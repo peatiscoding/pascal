@@ -16,10 +16,9 @@ type StatResult struct {
 }
 
 type StatFilter struct {
-	GroupBy  string  // "cg", "sc", "tag", or strftime expression
+	GroupBy  string  // "sc", "tag", or strftime expression
 	ValueKey *string // master_value key to aggregate
 	Scope    *string
-	Category *string
 	Tag      *string
 	From     *string
 	To       *string
@@ -30,8 +29,6 @@ func QueryStats(db *sql.DB, f StatFilter) ([]StatResult, error) {
 	var joinClause string
 
 	switch f.GroupBy {
-	case "cg":
-		groupExpr = "r.cg"
 	case "sc":
 		groupExpr = "r.sc"
 	case "tag":
@@ -60,10 +57,6 @@ func QueryStats(db *sql.DB, f StatFilter) ([]StatResult, error) {
 	if f.Scope != nil {
 		where = append(where, "r.sc LIKE ?")
 		args = append(args, *f.Scope+"%")
-	}
-	if f.Category != nil {
-		where = append(where, "r.cg = ?")
-		args = append(args, *f.Category)
 	}
 	if f.Tag != nil && f.GroupBy != "tag" {
 		query += ` JOIN record_tags rt2 ON r.id = rt2.record_id`
