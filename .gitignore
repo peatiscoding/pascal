@@ -3,3 +3,4 @@ pascal-bot
 .env
 /server
 runtime/*
+/bin
