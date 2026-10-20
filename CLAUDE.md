@@ -31,7 +31,7 @@ Short field names throughout. UUIDv7 as `BLOB(16)` for record IDs. Key tables:
 - `scope` — hierarchy master table for autocomplete/validation
 - `tag` — hierarchical tags (self-referential parent FK)
 - `master_value` — value type registry (THB, TOKEN, etc.)
-- `recipe` — templates with `recipe_values` and `recipe_tags` for MCP interpretation
+- `recipe` — templates with `recipe_values` and `recipe_scopes` for MCP interpretation
 - `webhook` — configurable ingestion endpoints (pattern, field_map, optional recipe binding)
 - `gcal_sync` — Google Calendar watch channel config
 - `ingest_queue` (in runtime/queue.db) — pending unstructured text for Ollama processing
@@ -39,6 +39,16 @@ Short field names throughout. UUIDv7 as `BLOB(16)` for record IDs. Key tables:
 Deletion strategy: `ON DELETE CASCADE` everywhere, no soft delete.
 
 Network: VPS with public endpoints (webhooks, gcal push) + Tailscale for everything else.
+
+## Development
+
+- `make dev` — run all 3 servers (foreground, Ctrl-C kills all)
+- `make dev-detached` — run all 3 servers in background
+- `make dev-kill` — kill all servers (ports 7600, 7601, 7602)
+- `make server` / `make bot` / `make web` — run individual server
+- `make test` — run all tests
+- `make build` — compile binaries
+- `make tidy` — go mod tidy
 
 ## Design Documents
 

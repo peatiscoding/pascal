@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strconv"
 
 	"pascal/internal/db"
@@ -75,9 +76,9 @@ func (s *Server) deleteMasterValue(w http.ResponseWriter, r *http.Request) {
 // --- Tags ---
 
 type tagReq struct {
-	Tag         string  `json:"t"`
-	Parent      *string `json:"p,omitempty"`
-	Description string  `json:"d"`
+	Tag         string `json:"t"`
+	ScopeID     *int   `json:"s,omitempty"`
+	Description string `json:"d"`
 }
 
 func (s *Server) createTag(w http.ResponseWriter, r *http.Request) {
@@ -86,11 +87,15 @@ func (s *Server) createTag(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Tag == "" || req.Description == "" {
-		http.Error(w, "t and d required", http.StatusBadRequest)
+	if req.Tag == "" {
+		http.Error(w, "t required", http.StatusBadRequest)
 		return
 	}
-	if _, err := s.mainDB.Exec(`INSERT INTO tag (t, p, d) VALUES (?, ?, ?)`, req.Tag, req.Parent, req.Description); err != nil {
+	if matched, _ := regexp.MatchString(`^[a-zA-Z0-9\-]+$`, req.Tag); !matched {
+		http.Error(w, "t must be alphanumeric with dashes only", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.mainDB.Exec(`INSERT INTO tag (t, s, d) VALUES (?, ?, ?)`, req.Tag, req.ScopeID, req.Description); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -107,28 +112,28 @@ func (s *Server) updateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if parent is changing and tag is in use
-	var currentParent sql.NullString
-	if err := s.mainDB.QueryRow(`SELECT p FROM tag WHERE t=?`, t).Scan(&currentParent); err != nil {
+	// Check if scope_id is changing and tag is in use
+	var currentScopeID sql.NullInt64
+	if err := s.mainDB.QueryRow(`SELECT s FROM tag WHERE t=?`, t).Scan(&currentScopeID); err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	newParent := req.Parent
-	parentChanged := (currentParent.Valid != (newParent != nil)) ||
-		(currentParent.Valid && newParent != nil && currentParent.String != *newParent)
-	if parentChanged {
+	newScopeID := req.ScopeID
+	scopeChanged := (currentScopeID.Valid != (newScopeID != nil)) ||
+		(currentScopeID.Valid && newScopeID != nil && int(currentScopeID.Int64) != *newScopeID)
+	if scopeChanged {
 		inUse, err := db.TagInUse(s.mainDB, t)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if inUse {
-			http.Error(w, "cannot change parent of tag in use by records", http.StatusConflict)
+			http.Error(w, "cannot change scope of tag in use by records", http.StatusConflict)
 			return
 		}
 	}
 
-	res, err := s.mainDB.Exec(`UPDATE tag SET p=?, d=? WHERE t=?`, req.Parent, req.Description, t)
+	res, err := s.mainDB.Exec(`UPDATE tag SET s=?, d=? WHERE t=?`, req.ScopeID, req.Description, t)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

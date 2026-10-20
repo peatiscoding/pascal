@@ -2,7 +2,7 @@
 body { font-family: system-ui, sans-serif; max-width: 960px; margin: 0 auto; padding: 1rem; color: #1a1a1a; }
 
 /* Header & Nav */
-header { margin-bottom: 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #e0e0e0; padding-bottom: 1rem; }
+header { margin-bottom: 2rem; display: flex; align-items: center; gap: 2rem; border-bottom: 1px solid #e0e0e0; padding-bottom: 1rem; position: relative; }
 header h1 { font-size: 1.5rem; white-space: nowrap; }
 nav { display: flex; gap: 0.5rem; }
 .nav-link {
@@ -126,6 +126,15 @@ tr.clickable { cursor: pointer; }
 .tree-inline-form { margin-left: 1.5rem; }
 .tree-form-slot:empty { display: none; }
 #scope-root-form { margin-bottom: 0.5rem; }
+
+/* Status dots */
+.status-dots { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #ccc; transition: background 0.3s;
+}
+.status-dot.ok { background: #16a34a; }
+.status-dot.down { background: #dc2626; }
 
 /* Empty state */
 .empty { color: #888; text-align: center; padding: 3rem 1rem; }

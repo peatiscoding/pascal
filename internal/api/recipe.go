@@ -46,8 +46,8 @@ func (s *Server) createRecipe(w http.ResponseWriter, r *http.Request) {
 	if req.Values == nil {
 		req.Values = []db.RecipeValue{}
 	}
-	if req.Tags == nil {
-		req.Tags = []db.RecipeTag{}
+	if req.Scopes == nil {
+		req.Scopes = []db.RecipeScope{}
 	}
 
 	if err := db.InsertRecipe(s.mainDB, &req); err != nil {
@@ -71,8 +71,8 @@ func (s *Server) updateRecipe(w http.ResponseWriter, r *http.Request) {
 	if req.Values == nil {
 		req.Values = []db.RecipeValue{}
 	}
-	if req.Tags == nil {
-		req.Tags = []db.RecipeTag{}
+	if req.Scopes == nil {
+		req.Scopes = []db.RecipeScope{}
 	}
 
 	if err := db.UpdateRecipe(s.mainDB, &req); err != nil {

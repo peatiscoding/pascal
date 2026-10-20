@@ -10,16 +10,17 @@ type RecipeValue struct {
 	Required  bool   `json:"required"`
 }
 
-type RecipeTag struct {
-	Tag      string `json:"tag"`
-	Required bool   `json:"required"`
+type RecipeScope struct {
+	ScopeID   int    `json:"scope_id"`
+	ScopeName string `json:"scope_name,omitempty"`
+	Required  bool   `json:"required"`
 }
 
 type RecipeFull struct {
 	Usecase     string        `json:"u"`
 	Description string        `json:"d"`
 	Values      []RecipeValue `json:"values"`
-	Tags        []RecipeTag   `json:"tags"`
+	Scopes      []RecipeScope `json:"scopes"`
 }
 
 func GetRecipe(db *sql.DB, usecase string) (*RecipeFull, error) {
@@ -28,38 +29,7 @@ func GetRecipe(db *sql.DB, usecase string) (*RecipeFull, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	rows, err := db.Query(`SELECT master_key, required FROM recipe_values WHERE recipe_u=?`, usecase)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var v RecipeValue
-		var req int
-		if err := rows.Scan(&v.MasterKey, &req); err != nil {
-			return nil, err
-		}
-		v.Required = req == 1
-		r.Values = append(r.Values, v)
-	}
-
-	trows, err := db.Query(`SELECT tag, required FROM recipe_tags WHERE recipe_u=?`, usecase)
-	if err != nil {
-		return nil, err
-	}
-	defer trows.Close()
-	for trows.Next() {
-		var t RecipeTag
-		var req int
-		if err := trows.Scan(&t.Tag, &req); err != nil {
-			return nil, err
-		}
-		t.Required = req == 1
-		r.Tags = append(r.Tags, t)
-	}
-
-	return r, nil
+	return hydrateRecipe(db, r)
 }
 
 func ListRecipesFull(db *sql.DB) ([]RecipeFull, error) {
@@ -108,19 +78,19 @@ func hydrateRecipe(d *sql.DB, r *RecipeFull) (*RecipeFull, error) {
 		r.Values = append(r.Values, v)
 	}
 
-	trows, err := d.Query(`SELECT tag, required FROM recipe_tags WHERE recipe_u=?`, r.Usecase)
+	srows, err := d.Query(`SELECT rs.scope_id, s.name, rs.required FROM recipe_scopes rs JOIN scope s ON s.id=rs.scope_id WHERE rs.recipe_u=?`, r.Usecase)
 	if err != nil {
 		return nil, err
 	}
-	defer trows.Close()
-	for trows.Next() {
-		var t RecipeTag
+	defer srows.Close()
+	for srows.Next() {
+		var sc RecipeScope
 		var req int
-		if err := trows.Scan(&t.Tag, &req); err != nil {
+		if err := srows.Scan(&sc.ScopeID, &sc.ScopeName, &req); err != nil {
 			return nil, err
 		}
-		t.Required = req == 1
-		r.Tags = append(r.Tags, t)
+		sc.Required = req == 1
+		r.Scopes = append(r.Scopes, sc)
 	}
 
 	return r, nil
@@ -148,14 +118,14 @@ func InsertRecipe(db *sql.DB, r *RecipeFull) error {
 		}
 	}
 
-	for _, t := range r.Tags {
+	for _, sc := range r.Scopes {
 		req := 0
-		if t.Required {
+		if sc.Required {
 			req = 1
 		}
-		if _, err := tx.Exec(`INSERT INTO recipe_tags (recipe_u, tag, required) VALUES (?, ?, ?)`,
-			r.Usecase, t.Tag, req); err != nil {
-			return fmt.Errorf("insert recipe_tag %s: %w", t.Tag, err)
+		if _, err := tx.Exec(`INSERT INTO recipe_scopes (recipe_u, scope_id, required) VALUES (?, ?, ?)`,
+			r.Usecase, sc.ScopeID, req); err != nil {
+			return fmt.Errorf("insert recipe_scope %d: %w", sc.ScopeID, err)
 		}
 	}
 
@@ -178,12 +148,11 @@ func UpdateRecipe(db *sql.DB, r *RecipeFull) error {
 		return fmt.Errorf("recipe not found")
 	}
 
-	// Delete+reinsert values and tags
 	if _, err := tx.Exec(`DELETE FROM recipe_values WHERE recipe_u=?`, r.Usecase); err != nil {
 		return fmt.Errorf("clear recipe_values: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM recipe_tags WHERE recipe_u=?`, r.Usecase); err != nil {
-		return fmt.Errorf("clear recipe_tags: %w", err)
+	if _, err := tx.Exec(`DELETE FROM recipe_scopes WHERE recipe_u=?`, r.Usecase); err != nil {
+		return fmt.Errorf("clear recipe_scopes: %w", err)
 	}
 
 	for _, v := range r.Values {
@@ -197,14 +166,14 @@ func UpdateRecipe(db *sql.DB, r *RecipeFull) error {
 		}
 	}
 
-	for _, t := range r.Tags {
+	for _, sc := range r.Scopes {
 		req := 0
-		if t.Required {
+		if sc.Required {
 			req = 1
 		}
-		if _, err := tx.Exec(`INSERT INTO recipe_tags (recipe_u, tag, required) VALUES (?, ?, ?)`,
-			r.Usecase, t.Tag, req); err != nil {
-			return fmt.Errorf("insert recipe_tag %s: %w", t.Tag, err)
+		if _, err := tx.Exec(`INSERT INTO recipe_scopes (recipe_u, scope_id, required) VALUES (?, ?, ?)`,
+			r.Usecase, sc.ScopeID, req); err != nil {
+			return fmt.Errorf("insert recipe_scope %d: %w", sc.ScopeID, err)
 		}
 	}
 

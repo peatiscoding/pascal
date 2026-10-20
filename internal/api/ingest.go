@@ -51,7 +51,7 @@ func (s *Server) ingestText(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listTags(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.mainDB.Query(`SELECT t, p, d FROM tag ORDER BY t`)
+	rows, err := s.mainDB.Query(`SELECT t.t, t.s, sc.name, t.d FROM tag t LEFT JOIN scope sc ON t.s = sc.id ORDER BY t.t`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -59,15 +59,16 @@ func (s *Server) listTags(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type tag struct {
-		Name        string  `json:"t"`
-		Parent      *string `json:"p,omitempty"`
-		Description string  `json:"d"`
+		Name      string  `json:"t"`
+		ScopeID   *int    `json:"s,omitempty"`
+		ScopeName *string `json:"scope_name,omitempty"`
+		Desc      string  `json:"d"`
 	}
 
 	var tags []tag
 	for rows.Next() {
 		var t tag
-		if err := rows.Scan(&t.Name, &t.Parent, &t.Description); err != nil {
+		if err := rows.Scan(&t.Name, &t.ScopeID, &t.ScopeName, &t.Desc); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

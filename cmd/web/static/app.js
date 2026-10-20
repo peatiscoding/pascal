@@ -15,10 +15,10 @@ function route() {
     if (hash === '#recipes') return renderRecipes();
     if (hash === '#recipes/new') return renderRecipeForm(null);
     if (hash.startsWith('#recipes/edit/')) return renderRecipeForm(decodeURIComponent(hash.slice('#recipes/edit/'.length)));
-    if (hash === '#master') return renderMaster('values');
-    if (hash === '#master/values') return renderMaster('values');
-    if (hash === '#master/tags') return renderMaster('tags');
+    if (hash === '#master') return renderMaster('scopes');
     if (hash === '#master/scopes') return renderMaster('scopes');
+    if (hash === '#master/tags') return renderMaster('tags');
+    if (hash === '#master/values') return renderMaster('values');
 
     renderDashboard();
 }
@@ -141,14 +141,14 @@ async function renderRecipes() {
         }
         el.innerHTML = `
             <table>
-                <thead><tr><th>Usecase</th><th>Description</th><th>Values</th><th>Tags</th></tr></thead>
+                <thead><tr><th>Usecase</th><th>Description</th><th>Scopes</th><th>Values</th></tr></thead>
                 <tbody>
                     ${recipes.map(r => `
                         <tr class="clickable" onclick="location.hash='#recipes/edit/${encodeURIComponent(r.u)}'">
                             <td><strong>${esc(r.u)}</strong></td>
                             <td>${esc(r.d)}</td>
+                            <td><span class="badge">${(r.scopes || []).length}</span></td>
                             <td><span class="badge">${(r.values || []).length}</span></td>
-                            <td><span class="badge">${(r.tags || []).length}</span></td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -162,14 +162,14 @@ async function renderRecipes() {
 // --- Recipe Form ---
 
 let _masterValues = null;
-let _tags = null;
+let _scopeOptions = null;
 
 async function loadOptions() {
     if (!_masterValues) {
         _masterValues = await api('/api/master-values').catch(() => []);
     }
-    if (!_tags) {
-        _tags = await api('/api/tags').catch(() => []);
+    if (!_scopeOptions) {
+        _scopeOptions = await api('/api/scopes').catch(() => []);
     }
 }
 
@@ -177,7 +177,7 @@ async function renderRecipeForm(usecase) {
     app.innerHTML = '<p>Loading...</p>';
     await loadOptions();
 
-    let recipe = { u: '', d: '', values: [], tags: [] };
+    let recipe = { u: '', d: '', values: [], scopes: [] };
     const isEdit = usecase != null;
 
     if (isEdit) {
@@ -211,9 +211,9 @@ async function renderRecipeForm(usecase) {
             </div>
 
             <div class="form-group">
-                <label>Tags</label>
-                <div class="dynamic-list" id="rf-tags"></div>
-                <button type="button" class="add-row" onclick="addTagRow()">+ Add Tag</button>
+                <label>Scopes</label>
+                <div class="dynamic-list" id="rf-scopes"></div>
+                <button type="button" class="add-row" onclick="addScopeRow()">+ Add Scope</button>
             </div>
 
             <div class="form-actions">
@@ -223,9 +223,9 @@ async function renderRecipeForm(usecase) {
         </form>
     `;
 
-    // Populate existing values/tags
+    // Populate existing values/scopes
     (recipe.values || []).forEach(v => addValueRow(v.master_key, v.required));
-    (recipe.tags || []).forEach(t => addTagRow(t.tag, t.required));
+    (recipe.scopes || []).forEach(s => addScopeRow(s.scope_id, s.required));
 
     document.getElementById('recipe-form').onsubmit = async (e) => {
         e.preventDefault();
@@ -248,16 +248,16 @@ function addValueRow(key, required) {
     container.appendChild(row);
 }
 
-function addTagRow(tag, required) {
-    const container = document.getElementById('rf-tags');
+function addScopeRow(scopeId, required) {
+    const container = document.getElementById('rf-scopes');
     const row = document.createElement('div');
     row.className = 'dynamic-row';
     row.innerHTML = `
-        <select class="rt-tag">
+        <select class="rs-scope">
             <option value="">-- select --</option>
-            ${(_tags || []).map(t => `<option value="${esc(t.t)}" ${t.t === tag ? 'selected' : ''}>${esc(t.t)}${t.d ? ' — ' + esc(t.d) : ''}</option>`).join('')}
+            ${(_scopeOptions || []).map(s => `<option value="${s.id}" ${s.id === scopeId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
         </select>
-        <label><input type="checkbox" class="rt-req" ${required !== false ? 'checked' : ''}> Required</label>
+        <label><input type="checkbox" class="rs-req" ${required !== false ? 'checked' : ''}> Required</label>
         <button type="button" class="btn-remove" onclick="this.closest('.dynamic-row').remove()">×</button>
     `;
     container.appendChild(row);
@@ -273,12 +273,12 @@ async function saveRecipe(isEdit) {
         required: row.querySelector('.rv-req').checked,
     })).filter(v => v.master_key);
 
-    const tags = [...document.querySelectorAll('#rf-tags .dynamic-row')].map(row => ({
-        tag: row.querySelector('.rt-tag').value,
-        required: row.querySelector('.rt-req').checked,
-    })).filter(t => t.tag);
+    const scopes = [...document.querySelectorAll('#rf-scopes .dynamic-row')].map(row => ({
+        scope_id: parseInt(row.querySelector('.rs-scope').value),
+        required: row.querySelector('.rs-req').checked,
+    })).filter(s => s.scope_id);
 
-    const body = JSON.stringify({ u, d, values, tags });
+    const body = JSON.stringify({ u, d, values, scopes });
 
     try {
         if (isEdit) {
@@ -305,14 +305,14 @@ async function deleteRecipe(u) {
 // --- Master Data ---
 
 async function renderMaster(tab) {
-    tab = tab || 'values';
+    tab = tab || 'scopes';
     app.innerHTML = `
         <h2 style="margin-bottom:0.5rem">Master Data</h2>
-        <p style="color:#888;font-size:0.85rem;margin-bottom:1rem">Reference tables used by recipes and records. <strong>Values</strong> for aggregation, <strong>Tags</strong> for filtering and classification, <strong>Scopes</strong> for organizational hierarchy.</p>
+        <p style="color:#888;font-size:0.85rem;margin-bottom:1rem">Reference tables used by recipes and records. <strong>Scopes</strong> for hierarchy and tag grouping, <strong>Tags</strong> for filtering (scoped tags are exclusive per record), <strong>Values</strong> for aggregation.</p>
         <div class="master-tabs">
-            <a href="#master/values" class="tab-btn ${tab === 'values' ? 'active' : ''}">Values</a>
-            <a href="#master/tags" class="tab-btn ${tab === 'tags' ? 'active' : ''}">Tags</a>
             <a href="#master/scopes" class="tab-btn ${tab === 'scopes' ? 'active' : ''}">Scopes</a>
+            <a href="#master/tags" class="tab-btn ${tab === 'tags' ? 'active' : ''}">Tags</a>
+            <a href="#master/values" class="tab-btn ${tab === 'values' ? 'active' : ''}">Values</a>
         </div>
         <div id="master-content">Loading...</div>
     `;
@@ -396,28 +396,36 @@ async function deleteMasterValue(k) {
 
 // --- Tags tab ---
 
+let _tagsCache = [];
+let _scopesCache = [];
+
 async function renderMasterTags() {
     const el = document.getElementById('master-content');
     el.innerHTML = 'Loading...';
     try {
-        const tags = await api('/api/tags');
+        const [tags, scopes] = await Promise.all([
+            api('/api/tags'),
+            api('/api/scopes'),
+        ]);
+        _tagsCache = tags || [];
+        _scopesCache = scopes || [];
         el.innerHTML = `
-            <p class="tab-desc">Tags serve dual purpose: <strong>filtering</strong> and <strong>classification</strong>. Root tags (no parent) attach freely — a record can have many. Child tags (with parent) are <strong>exclusive</strong> — only one per parent group per record, acting as categories (e.g. parent "type" → children "expense"/"workout" — pick one).</p>
+            <p class="tab-desc">Tags label records for <strong>filtering</strong>. A tag can optionally belong to a <strong>scope</strong> — tags sharing the same scope are <strong>exclusive</strong> (one per record per scope). Tags without a scope attach freely.</p>
             <div class="toolbar" style="margin-top:1rem">
-                <span>${(tags || []).length} tag(s)</span>
+                <span>${_tagsCache.length} tag(s)</span>
                 <button class="btn btn-primary btn-sm" onclick="showTagForm()">+ Add</button>
             </div>
             <div id="tag-form-slot"></div>
             <table>
-                <thead><tr><th>Tag</th><th>Parent</th><th>Description</th><th></th></tr></thead>
+                <thead><tr><th>Scope</th><th>Tag Key</th><th>Description</th><th></th></tr></thead>
                 <tbody>
-                    ${(tags || []).map(t => `
+                    ${_tagsCache.slice().sort((a, b) => (a.scope_name || '').localeCompare(b.scope_name || '') || a.t.localeCompare(b.t)).map(t => `
                         <tr>
+                            <td>${t.scope_name ? esc(t.scope_name) : '<span style="color:#888">*</span>'}</td>
                             <td><strong>${esc(t.t)}</strong></td>
-                            <td>${t.p ? esc(t.p) : '<span style="color:#ccc">—</span>'}</td>
-                            <td>${esc(t.d)}</td>
+                            <td>${t.d ? esc(t.d) : ''}</td>
                             <td style="text-align:right">
-                                <button class="btn btn-secondary btn-sm" onclick="showTagForm('${esc(t.t)}',${t.p ? `'${esc(t.p)}'` : 'null'},'${esc(t.d)}')">Edit</button>
+                                <button class="btn btn-secondary btn-sm" onclick="showTagForm('${esc(t.t)}',${t.s ?? 'null'},'${esc(t.d)}')">Edit</button>
                                 <button class="btn btn-danger btn-sm" onclick="deleteTagItem('${esc(t.t)}')">Delete</button>
                             </td>
                         </tr>
@@ -430,13 +438,16 @@ async function renderMasterTags() {
     }
 }
 
-function showTagForm(tag, parent, desc) {
+function showTagForm(tag, scopeId, desc) {
     const isEdit = tag != null;
+    const scopeOptions = _scopesCache
+        .map(s => `<option value="${s.id}" ${s.id === scopeId ? 'selected' : ''}>${esc(s.name)}</option>`)
+        .join('');
     document.getElementById('tag-form-slot').innerHTML = `
         <form class="inline-form" onsubmit="saveTag(event, ${isEdit})">
-            <input id="tf-t" value="${esc(tag || '')}" placeholder="Tag key" ${isEdit ? 'disabled' : ''} required>
-            <input id="tf-p" value="${esc(parent || '')}" placeholder="Parent tag (optional)">
-            <input id="tf-d" value="${esc(desc || '')}" placeholder="Description" required style="flex:2">
+            <select id="tf-scope"><option value="">No scope (free tag)</option>${scopeOptions}</select>
+            <input id="tf-t" value="${esc(tag || '')}" placeholder="Tag key" pattern="[a-zA-Z0-9\\-]+" title="Alphanumeric and dashes only" ${isEdit ? 'disabled' : ''} required>
+            <input id="tf-d" value="${esc(desc || '')}" placeholder="Description (optional)" style="flex:2">
             <button type="submit" class="btn btn-primary btn-sm">${isEdit ? 'Save' : 'Add'}</button>
             <button type="button" class="btn btn-secondary btn-sm" onclick="this.closest('.inline-form').remove()">Cancel</button>
         </form>
@@ -447,16 +458,17 @@ function showTagForm(tag, parent, desc) {
 async function saveTag(e, isEdit) {
     e.preventDefault();
     const t = document.getElementById('tf-t').value.trim();
-    const p = document.getElementById('tf-p').value.trim() || null;
+    const scopeVal = document.getElementById('tf-scope').value;
+    const s = scopeVal ? parseInt(scopeVal) : null;
     const d = document.getElementById('tf-d').value.trim();
-    if (!t || !d) return;
+    if (!t) return;
     try {
         if (isEdit) {
-            await api('/api/tags/' + encodeURIComponent(t), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t, p, d }) });
+            await api('/api/tags/' + encodeURIComponent(t), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t, s, d }) });
         } else {
-            await api('/api/tags', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t, p, d }) });
+            await api('/api/tags', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t, s, d }) });
         }
-        _tags = null;
+        _tagsCache = [];
         renderMasterTags();
     } catch (e) { alert('Error: ' + e.message); }
 }
@@ -465,7 +477,7 @@ async function deleteTagItem(t) {
     if (!confirm('Delete tag "' + t + '"?')) return;
     try {
         await api('/api/tags/' + encodeURIComponent(t), { method: 'DELETE' });
-        _tags = null;
+        _tagsCache = [];
         renderMasterTags();
     } catch (e) { alert('Error: ' + e.message); }
 }
@@ -480,7 +492,7 @@ async function renderMasterScopes() {
     try {
         _scopesData = await api('/api/scopes') || [];
         el.innerHTML = `
-            <p class="tab-desc">Scopes define the organizational hierarchy. Each record has exactly <strong>one</strong> scope — used for <strong>classification</strong>, grouping, and pie charts (e.g. Work|ProjectX, Personal|Health).</p>
+            <p class="tab-desc">Scopes define the organizational hierarchy and serve as tag grouping. Each record has exactly <strong>one</strong> scope. Tags linked to a scope are exclusive — one per scope per record. (e.g. Work|ProjectX, Personal|Health).</p>
             <div class="toolbar" style="margin-top:1rem">
                 <span>${_scopesData.length} scope(s)</span>
                 <button class="btn btn-primary btn-sm" onclick="showScopeForm(null, null)">+ Add Root</button>
@@ -591,6 +603,25 @@ function connectWS() {
     ws.onclose = () => setTimeout(connectWS, 2000);
 }
 connectWS();
+
+// --- Status Dots ---
+
+async function updateStatusDots() {
+    const checks = [
+        { id: 'dot-server', url: API + '/api/health' },
+        { id: 'dot-bot', url: BOT_URL + '/health' },
+        { id: 'dot-web', url: '/health' },
+    ];
+    await Promise.all(checks.map(async ({ id, url }) => {
+        const dot = document.getElementById(id);
+        if (!dot) return;
+        const result = await healthCheck(url);
+        dot.className = 'status-dot ' + (result.status && result.status !== 'down' ? 'ok' : 'down');
+    }));
+}
+
+updateStatusDots();
+setInterval(updateStatusDots, 30000);
 
 // --- Util ---
 

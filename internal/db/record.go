@@ -61,21 +61,22 @@ func InsertRecord(db *sql.DB, r *RecordFull) error {
 	return tx.Commit()
 }
 
-// insertTagsExclusive inserts tags enforcing: max one child per parent group.
-// Root tags (no parent) have no exclusivity constraint.
+// insertTagsExclusive inserts tags enforcing: max one tag per scope group.
+// Tags without scope_id have no exclusivity constraint.
 func insertTagsExclusive(tx *sql.Tx, recordID []byte, tags []string) error {
-	parentSeen := map[string]string{} // parent -> tag already used
+	scopeSeen := map[int]string{} // scope_id -> tag already used
 	for _, tag := range tags {
-		var parent sql.NullString
-		err := tx.QueryRow(`SELECT p FROM tag WHERE t=?`, tag).Scan(&parent)
+		var scopeID sql.NullInt64
+		err := tx.QueryRow(`SELECT s FROM tag WHERE t=?`, tag).Scan(&scopeID)
 		if err != nil {
 			return fmt.Errorf("lookup tag %s: %w", tag, err)
 		}
-		if parent.Valid {
-			if existing, ok := parentSeen[parent.String]; ok {
-				return fmt.Errorf("tag conflict: '%s' and '%s' share parent '%s' (only one allowed)", existing, tag, parent.String)
+		if scopeID.Valid {
+			sid := int(scopeID.Int64)
+			if existing, ok := scopeSeen[sid]; ok {
+				return fmt.Errorf("tag conflict: '%s' and '%s' share scope (only one per scope allowed)", existing, tag)
 			}
-			parentSeen[parent.String] = tag
+			scopeSeen[sid] = tag
 		}
 		if _, err := tx.Exec(`INSERT INTO record_tags (record_id, tag) VALUES (?, ?)`, recordID, tag); err != nil {
 			return fmt.Errorf("insert tag %s: %w", tag, err)
