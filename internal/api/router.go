@@ -78,6 +78,7 @@ func (s *Server) Router() *chi.Mux {
 
 		r.Route("/ingest", func(r chi.Router) {
 			r.Post("/text", s.ingestText)
+			r.Get("/text/{id}", s.getQueueItem)
 			r.Post("/record", s.createRecord)
 			r.Post("/webhook/{id}", s.handleWebhook)
 		})

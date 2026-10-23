@@ -3,13 +3,17 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"pascal/internal/db"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type ingestRequest struct {
-	Text   string `json:"text"`
-	Source string `json:"source"`
+	Text    string  `json:"text"`
+	Source  string  `json:"source"`
+	RecipeU *string `json:"recipe_u,omitempty"`
 }
 
 type ingestResponse struct {
@@ -32,7 +36,7 @@ func (s *Server) ingestText(w http.ResponseWriter, r *http.Request) {
 		req.Source = "api"
 	}
 
-	queueID, err := db.Enqueue(s.queueDB, req.Text, req.Source)
+	queueID, err := db.Enqueue(s.queueDB, req.Text, req.Source, req.RecipeU)
 	if err != nil {
 		if err.Error() == "queue full" {
 			http.Error(w, "queue full", http.StatusTooManyRequests)
@@ -48,6 +52,24 @@ func (s *Server) ingestText(w http.ResponseWriter, r *http.Request) {
 		QueueID: queueID,
 		Status:  "queued",
 	})
+}
+
+func (s *Server) getQueueItem(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	item, err := db.GetQueueItem(s.queueDB, id)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(item)
 }
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {

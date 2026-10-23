@@ -41,6 +41,7 @@ flowchart TB
     subgraph External["External Sources"]
         MCP[MCP Client]
         WebUI[Web UI]
+        Raycast[Raycast Scripts]
         Gmail[Gmail Filter]
         Bank[Bank API]
         Scripts[Custom Scripts]
@@ -82,6 +83,8 @@ flowchart TB
     %% Structured sources (bypass queue)
     MCP --> IngestRecord
     WebUI --> IngestRecord
+    Raycast -->|"Pascal Record"| IngestRecord
+    Raycast -->|"Pascal Log"| IngestText
     IngestRecord --> DirectWrite
 
     %% Webhook sources
@@ -531,6 +534,32 @@ No conversation phase tracking. The queue status IS the state. Bot just renders 
 6. **User reply in thread:** Look up thread → last queue context, POST new `/api/ingest/text` with combined text + resolved `recipe_u`
 7. **`cancel`:** Close thread context, no further processing
 
+## Raycast Scripts
+
+Lightweight ingestion from macOS/iPhone via Raycast. Scripts in `scripts/`.
+
+### `raycast-pascal-log.sh` — Unstructured
+
+Quick-capture text → queue → Ollama processing.
+
+- **Raycast command:** "Pascal Log"
+- **Input:** Free text (e.g. "Lunch 200 THB prompt pay")
+- **Endpoint:** `POST /api/ingest/text` with `source: "raycast"`
+- **Response:** "Queued (#N)"
+
+### `raycast-pascal-record.sh` — Structured
+
+Direct record creation, no Ollama.
+
+- **Raycast command:** "Pascal Record"
+- **Input:** Title + optional scope
+- **Endpoint:** `POST /api/ingest/record`
+- **Response:** "Recorded: {title}"
+
+### Setup
+
+Set `PASCAL_URL` env var in Raycast preferences. Default: `http://100.64.0.1:7600` (Tailscale IP of server).
+
 ## Network Topology
 
 ```
@@ -540,8 +569,8 @@ Internet (Public VPS IP)
 ├── POST /api/ingest/record     ← (public alias for structured ingestion)
 │
 Tailscale (Internal)
-├── POST /api/ingest/text       ← Discord bot, unstructured sources
-├── POST /api/ingest/record     ← MCP, Web UI (same handler as /api/records)
+├── POST /api/ingest/text       ← Discord bot, Raycast (Pascal Log)
+├── POST /api/ingest/record     ← MCP, Web UI, Raycast (Pascal Record)
 ├── POST /api/records           ← MCP, Web UI (original path, kept)
 ├── GET  /api/records           ← Web UI
 ├── GET  /api/stats             ← Web UI

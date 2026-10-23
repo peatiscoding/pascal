@@ -8,11 +8,13 @@ let logSource = null;
 function route() {
     if (logSource) { logSource.close(); logSource = null; }
     const hash = location.hash || '#dashboard';
-    document.querySelectorAll('.nav-link').forEach(a => {
-        a.classList.toggle('active', hash.startsWith(a.getAttribute('href')));
+    document.querySelectorAll('cds-header-nav-item.nav-link').forEach(a => {
+        const isActive = hash.startsWith(a.getAttribute('href'));
+        a.toggleAttribute('active', isActive);
     });
 
     if (hash === '#dashboard') return renderDashboard();
+    if (hash.startsWith('#draft/')) return renderDraft(hash.slice('#draft/'.length));
     if (hash === '#records') return renderRecords();
     if (hash === '#recipes') return renderRecipes();
     if (hash === '#recipes/new') return renderRecipeForm(null);
@@ -89,9 +91,11 @@ async function renderDashboard() {
 
 function renderHealthCard(id, data) {
     const el = document.getElementById(id);
+    const title = el.dataset.title || el.querySelector('h3')?.textContent || '';
+    el.dataset.title = title;
     const ok = data.status && data.status !== 'down';
     el.innerHTML = `
-        <h3>${el.querySelector('h3')?.textContent || ''}</h3>
+        <h3>${esc(title)}</h3>
         <span class="health-status ${ok ? 'ok' : 'down'}">${ok ? 'Online' : 'Offline'}</span>
         ${ok && data.uptime_sec != null ? `<span class="health-detail">uptime: ${formatUptime(data.uptime_sec)}</span>` : ''}
     `;
@@ -591,6 +595,460 @@ async function deleteScopeItem(id, name) {
         await api('/api/scopes/' + id, { method: 'DELETE' });
         renderMasterScopes();
     } catch (e) { alert('Error: ' + e.message); }
+}
+
+// --- Ingest Spotlight ---
+
+function openSpotlight() {
+    if (document.getElementById('spotlight-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'spotlight-overlay';
+    overlay.className = 'spotlight-overlay';
+    overlay.innerHTML = `
+        <div class="spotlight-box">
+            <input id="spotlight-input" type="text" placeholder="Log something... e.g. Lunch 200 THB promptpay" autocomplete="off">
+            <div id="spotlight-hint" class="spotlight-hint">\u21B5 to send \u00b7 esc to close</div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const input = document.getElementById('spotlight-input');
+    const hint = document.getElementById('spotlight-hint');
+    input.focus();
+
+    overlay.onclick = (e) => { if (e.target === overlay) closeSpotlight(); };
+
+    input.onkeydown = async (e) => {
+        if (e.key === 'Escape') { closeSpotlight(); return; }
+        if (e.key === 'Enter') {
+            const text = input.value.trim();
+            if (!text) return;
+            input.disabled = true;
+            hint.textContent = 'Sending...';
+            try {
+                const resp = await fetch(API + '/api/ingest/text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, source: 'web' }),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    closeSpotlight();
+                    location.hash = '#draft/' + data.queue_id;
+                } else {
+                    hint.textContent = 'Error: ' + (data.error || resp.statusText);
+                    hint.style.color = '#da1e28';
+                    input.disabled = false;
+                }
+            } catch (err) {
+                hint.textContent = 'Error: ' + err.message;
+                hint.style.color = '#da1e28';
+                input.disabled = false;
+            }
+        }
+    };
+}
+
+function closeSpotlight() {
+    const el = document.getElementById('spotlight-overlay');
+    if (el) el.remove();
+}
+
+// Cmd+K / Ctrl+K global shortcut
+document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        openSpotlight();
+    }
+});
+
+// --- Draft ---
+
+let draftPollTimer = null;
+
+function renderDraft(queueId) {
+    if (draftPollTimer) { clearInterval(draftPollTimer); draftPollTimer = null; }
+
+    app.innerHTML = `
+        <h2 style="margin-bottom:1rem">Draft #${queueId}</h2>
+        <div id="draft-content"><p style="color:#888">Loading...</p></div>
+    `;
+
+    async function poll() {
+        try {
+            const resp = await fetch(API + '/api/ingest/text/' + queueId);
+            if (!resp.ok) {
+                document.getElementById('draft-content').innerHTML = `<p style="color:#dc2626">Queue item not found.</p>`;
+                clearInterval(draftPollTimer);
+                return;
+            }
+            const item = await resp.json();
+            renderDraftContent(item, queueId);
+        } catch (e) {
+            document.getElementById('draft-content').innerHTML = `<p style="color:#dc2626">Error: ${e.message}</p>`;
+        }
+    }
+
+    poll();
+    draftPollTimer = setInterval(poll, 1500);
+}
+
+function renderDraftContent(item, queueId) {
+    const el = document.getElementById('draft-content');
+    if (!el) return;
+
+    if (item.status === 'pending' || item.status === 'processing') {
+        el.innerHTML = `
+            <div class="draft-status">
+                <p>Processing... <span class="badge">${item.status}</span></p>
+                <p style="color:#888;font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
+            </div>
+        `;
+        return;
+    }
+
+    if (item.status === 'failed') {
+        clearInterval(draftPollTimer);
+        el.innerHTML = `
+            <div class="draft-status">
+                <p style="color:#dc2626">Failed: ${escHtml(item.error || 'Unknown error')}</p>
+                <p style="color:#888;font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
+                <div style="margin-top:1rem"><a href="#dashboard" class="btn btn-secondary">Back</a> <button class="btn btn-primary" onclick="openSpotlight()">Try again</button></div>
+            </div>
+        `;
+        return;
+    }
+
+    if (item.status === 'done') {
+        clearInterval(draftPollTimer);
+        let result = {};
+        try { result = JSON.parse(item.result || '{}'); } catch {}
+        el.innerHTML = `
+            <div class="draft-status">
+                <p style="color:#16a34a;font-weight:600">Record created!</p>
+                <p style="margin-top:0.5rem"><strong>${escHtml(result.tl || '')}</strong></p>
+                ${result.sc ? `<p style="color:#888;font-size:0.85rem">${escHtml(result.sc)}</p>` : ''}
+                <div style="margin-top:1rem">
+                    <a href="#records" class="btn btn-secondary">View Records</a>
+                    <button class="btn btn-primary" style="margin-left:0.5rem" onclick="openSpotlight()">Log Another</button>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    if (item.status === 'ambiguous') {
+        clearInterval(draftPollTimer);
+        let result = {};
+        try { result = JSON.parse(item.result || '{}'); } catch {}
+        const matches = result.matches || [];
+        el.innerHTML = `
+            <div class="draft-status">
+                <p>Multiple recipes match. Pick one:</p>
+                <div id="draft-choices" style="margin-top:0.5rem">
+                    ${matches.map((r, i) => `<button class="btn btn-secondary" style="margin:0.25rem" data-recipe="${escHtml(r)}">${escHtml(r)}</button>`).join('')}
+                </div>
+                <p style="color:#888;font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
+            </div>
+        `;
+        document.querySelectorAll('#draft-choices button').forEach(btn => {
+            btn.onclick = async () => {
+                const recipe = btn.dataset.recipe;
+                const resp = await fetch(API + '/api/ingest/text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: item.payload, source: 'web', recipe_u: recipe }),
+                });
+                const data = await resp.json();
+                if (resp.ok) location.hash = '#draft/' + data.queue_id;
+            };
+        });
+        return;
+    }
+
+    if (item.status === 'needs_input') {
+        clearInterval(draftPollTimer);
+        let result = {};
+        try { result = JSON.parse(item.result || '{}'); } catch {}
+        const missing = result.missing || [];
+        const partial = result.partial || {};
+        el.innerHTML = `
+            <div class="draft-status">
+                <p>Almost there! Fill in the missing fields:</p>
+                <p style="color:#888;font-size:0.85rem;margin-top:0.25rem">Input: ${escHtml(item.payload)}</p>
+                <div style="margin-top:1rem">
+                    <div class="form-group">
+                        <label>Title</label>
+                        <input id="draft-tl" value="${escHtml(partial.tl || '')}">
+                    </div>
+                    <div class="form-group">
+                        <label>Scope</label>
+                        <div id="draft-sc-input"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Tags</label>
+                        <div id="draft-tags-input"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Values</label>
+                        <div id="draft-values"></div>
+                        <button type="button" class="add-row" id="draft-add-value">+ Add value</button>
+                    </div>
+                    ${missing.length ? `<p style="color:#e67e22;font-size:0.85rem;margin-bottom:0.5rem">Missing: ${missing.join(', ')}</p>` : ''}
+                    <div class="form-group">
+                        <label>Additional info</label>
+                        <textarea id="draft-extra" rows="2" placeholder="Provide missing details..."></textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button id="draft-resubmit" class="btn btn-secondary">Re-process with extra info</button>
+                        <button id="draft-save" class="btn btn-primary">Save as-is</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Wire up autocomplete components after master data loads
+        let tagInput, scopeInput;
+        const valueRows = [];
+        fetchMasterData().then(master => {
+            const scopeSugs = master.scopes.map(s => ({ value: s.name, label: s.name }));
+            const scopeInitial = (partial.sc || '').split('|').filter(Boolean);
+            scopeInput = createTagInput(
+                document.getElementById('draft-sc-input'), scopeSugs, scopeInitial,
+                { allowNew: false, placeholder: 'Select scope...' }
+            );
+
+            const tagSugs = master.tags.map(t => ({
+                value: t.t, label: t.t,
+                hint: t.scope_name ? t.scope_name + (t.d ? ' \u00b7 ' + t.d : '') : (t.d || '')
+            }));
+            tagInput = createTagInput(
+                document.getElementById('draft-tags-input'), tagSugs, partial.tags || [],
+                { allowNew: true, placeholder: 'Add tags...' }
+            );
+
+            const valSugs = master.values.map(v => ({ value: v.k, label: v.k, hint: v.d }));
+            const valContainer = document.getElementById('draft-values');
+
+            function addValueRow(k, v) {
+                const row = document.createElement('div');
+                row.className = 'value-row';
+                const keyBox = document.createElement('div');
+                keyBox.style.flex = '1';
+                const numInput = document.createElement('input');
+                numInput.type = 'number';
+                numInput.placeholder = '0';
+                numInput.value = v || '';
+                const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'btn-remove';
+                removeBtn.textContent = '\u00d7';
+                row.appendChild(keyBox);
+                row.appendChild(numInput);
+                row.appendChild(removeBtn);
+                valContainer.appendChild(row);
+
+                const keyCtrl = createTagInput(keyBox, valSugs, k ? [k] : [], {
+                    single: true, placeholder: 'Value key...'
+                });
+                const entry = { keyCtrl, numInput, removed: false };
+                valueRows.push(entry);
+                removeBtn.onclick = () => { row.remove(); entry.removed = true; };
+            }
+
+            (partial.values || []).forEach(v => addValueRow(v.k, v.v));
+            document.getElementById('draft-add-value').onclick = () => addValueRow('', '');
+        });
+
+        document.getElementById('draft-resubmit').onclick = async () => {
+            const extra = document.getElementById('draft-extra').value.trim();
+            if (!extra) return;
+            const resp = await fetch(API + '/api/ingest/text', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: item.payload + '\n' + extra, source: 'web', recipe_u: item.recipe_u }),
+            });
+            const data = await resp.json();
+            if (resp.ok) location.hash = '#draft/' + data.queue_id;
+        };
+
+        document.getElementById('draft-save').onclick = async () => {
+            const tl = document.getElementById('draft-tl').value.trim();
+            const sc = scopeInput ? scopeInput.getSelected().join('|') : '';
+            const tags = tagInput ? tagInput.getSelected() : [];
+            const values = [];
+            valueRows.forEach(vr => {
+                if (vr.removed) return;
+                const k = vr.keyCtrl.getSelected()[0] || '';
+                const v = parseFloat(vr.numInput.value);
+                if (k && !isNaN(v)) values.push({ k, v });
+            });
+
+            if (!tl || !sc) { alert('Title and scope required'); return; }
+
+            try {
+                await api('/api/records', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tl, sc, st: partial.st || 3, tags, values, r: item.recipe_u }),
+                });
+                clearInterval(draftPollTimer);
+                el.innerHTML = `
+                    <div class="draft-status">
+                        <p style="color:#16a34a;font-weight:600">Record saved!</p>
+                        <div style="margin-top:1rem">
+                            <a href="#records" class="btn btn-secondary">View Records</a>
+                            <button class="btn btn-primary" style="margin-left:0.5rem" onclick="openSpotlight()">Log Another</button>
+                        </div>
+                    </div>
+                `;
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        };
+        return;
+    }
+}
+
+// --- Tag Input Component ---
+// suggestions: [{value, label, hint?}], selected: [string]
+// opts: { single, allowNew, onAdd(val), onRemove(val) }
+function createTagInput(container, suggestions, selected, opts = {}) {
+    const state = { selected: [...selected], activeIdx: -1 };
+    const known = new Set(suggestions.map(s => s.value));
+
+    function render() {
+        container.innerHTML = '';
+        container.classList.add('tag-input');
+        state.selected.forEach(val => {
+            const chip = document.createElement('span');
+            chip.className = 'tag-chip' + (known.has(val) ? '' : ' is-new');
+            const sug = suggestions.find(s => s.value === val);
+            let label = sug ? sug.label : val;
+            if (sug && sug.hint) label += ` <span class="tag-scope">${escHtml(sug.hint)}</span>`;
+            chip.innerHTML = label + ' <span class="tag-remove">&times;</span>';
+            chip.querySelector('.tag-remove').onclick = (e) => {
+                e.stopPropagation();
+                state.selected = state.selected.filter(v => v !== val);
+                if (opts.onRemove) opts.onRemove(val);
+                render();
+            };
+            container.appendChild(chip);
+        });
+
+        const input = document.createElement('input');
+        input.placeholder = state.selected.length ? '' : (opts.placeholder || 'Type to search...');
+        container.appendChild(input);
+
+        let dropdown = null;
+
+        function showDropdown(filter) {
+            hideDropdown();
+            const q = filter.toLowerCase();
+            let items = suggestions.filter(s =>
+                !state.selected.includes(s.value) &&
+                (s.label.toLowerCase().includes(q) || s.value.toLowerCase().includes(q))
+            );
+            if (q && opts.allowNew && !items.find(s => s.value === q) && !state.selected.includes(q)) {
+                items.push({ value: q, label: q, hint: 'new', isNew: true });
+            }
+            if (!items.length) return;
+
+            dropdown = document.createElement('div');
+            dropdown.className = 'tag-dropdown';
+            state.activeIdx = -1;
+            items.forEach((item, i) => {
+                const div = document.createElement('div');
+                div.className = 'tag-dropdown-item';
+                div.innerHTML = escHtml(item.label) + (item.hint ? ` <span class="hint">${escHtml(item.hint)}</span>` : '');
+                div.onmouseenter = () => { state.activeIdx = i; highlightActive(); };
+                div.onclick = () => pick(item.value);
+                dropdown.appendChild(div);
+            });
+            container.appendChild(dropdown);
+        }
+
+        function highlightActive() {
+            if (!dropdown) return;
+            dropdown.querySelectorAll('.tag-dropdown-item').forEach((el, i) => {
+                el.classList.toggle('active', i === state.activeIdx);
+            });
+        }
+
+        function hideDropdown() {
+            if (dropdown) { dropdown.remove(); dropdown = null; state.activeIdx = -1; }
+        }
+
+        function pick(val) {
+            if (opts.single) state.selected = [val];
+            else if (!state.selected.includes(val)) state.selected.push(val);
+            if (opts.onAdd) opts.onAdd(val);
+            hideDropdown();
+            render();
+            // re-focus input after render
+            const newInput = container.querySelector('input');
+            if (newInput) newInput.focus();
+        }
+
+        input.oninput = () => showDropdown(input.value);
+        input.onfocus = () => { if (input.value || !state.selected.length) showDropdown(input.value); };
+
+        input.onkeydown = (e) => {
+            if (e.key === 'Backspace' && !input.value && state.selected.length) {
+                const removed = state.selected.pop();
+                if (opts.onRemove) opts.onRemove(removed);
+                render();
+                const newInput = container.querySelector('input');
+                if (newInput) newInput.focus();
+                return;
+            }
+            if (!dropdown) return;
+            const items = dropdown.querySelectorAll('.tag-dropdown-item');
+            if (e.key === 'ArrowDown') { e.preventDefault(); state.activeIdx = Math.min(state.activeIdx + 1, items.length - 1); highlightActive(); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); state.activeIdx = Math.max(state.activeIdx - 1, 0); highlightActive(); }
+            else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (state.activeIdx >= 0 && items[state.activeIdx]) {
+                    items[state.activeIdx].click();
+                } else if (input.value.trim() && opts.allowNew) {
+                    pick(input.value.trim());
+                }
+            }
+            else if (e.key === 'Escape') hideDropdown();
+        };
+
+        // close dropdown on outside click
+        container._outsideClick = (e) => { if (!container.contains(e.target)) hideDropdown(); };
+        document.removeEventListener('click', container._outsideClick);
+        document.addEventListener('click', container._outsideClick);
+
+        container.onclick = () => input.focus();
+    }
+
+    render();
+    return {
+        getSelected: () => [...state.selected],
+        setSelected: (vals) => { state.selected = [...vals]; render(); },
+    };
+}
+
+// Fetch master data for autocomplete (cached per page load)
+let _masterCache = null;
+async function fetchMasterData() {
+    if (_masterCache) return _masterCache;
+    const [tags, scopes, values] = await Promise.all([
+        api('/api/tags').catch(() => []),
+        api('/api/scopes').catch(() => []),
+        api('/api/master-values').catch(() => []),
+    ]);
+    _masterCache = { tags: tags || [], scopes: scopes || [], values: values || [] };
+    return _masterCache;
+}
+
+function escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
 }
 
 // --- Logs ---

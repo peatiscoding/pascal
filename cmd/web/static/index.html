@@ -4,26 +4,58 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PASCAL</title>
+
+    <!-- IBM Plex (Carbon's typeface) -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+    <!-- Carbon Web Components (per-component, only what we use) -->
+    <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/version/v2.66.0/button.min.js"></script>
+    <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/version/v2.66.0/tag.min.js"></script>
+    <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/version/v2.66.0/text-input.min.js"></script>
+    <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/version/v2.66.0/textarea.min.js"></script>
+    <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/version/v2.66.0/dropdown.min.js"></script>
+    <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/version/v2.66.0/tabs.min.js"></script>
+    <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/version/v2.66.0/notification.min.js"></script>
+    <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/version/v2.66.0/ui-shell.min.js"></script>
+
+    <!-- Prevent FOUC while custom elements register -->
+    <style>
+        cds-button:not(:defined),
+        cds-tag:not(:defined),
+        cds-text-input:not(:defined),
+        cds-textarea:not(:defined),
+        cds-dropdown:not(:defined),
+        cds-tabs:not(:defined),
+        cds-header:not(:defined),
+        cds-header-name:not(:defined),
+        cds-header-nav:not(:defined),
+        cds-header-nav-item:not(:defined),
+        cds-actionable-notification:not(:defined) {
+            visibility: hidden;
+        }
+    </style>
+
     <link rel="stylesheet" href="style.css">
     <script src="config.js"></script>
 </head>
 <body>
-    <header>
-        <h1>PASCAL</h1>
-        <nav>
-            <a href="#dashboard" class="nav-link">Dashboard</a>
-            <a href="#records" class="nav-link">Records</a>
-            <a href="#recipes" class="nav-link">Recipes</a>
-            <a href="#master" class="nav-link">Master Data</a>
-            <a href="#logs" class="nav-link">Logs</a>
-        </nav>
+    <cds-header aria-label="PASCAL">
+        <cds-header-name prefix="">PASCAL</cds-header-name>
         <div class="status-dots" title="Server status">
             <span class="status-dot" id="dot-server" title="API Server"></span>
             <span class="status-dot" id="dot-bot" title="Discord Bot"></span>
             <span class="status-dot" id="dot-web" title="Web UI"></span>
             <span class="status-dot" id="dot-mcp" title="MCP Server"></span>
         </div>
-    </header>
+        <cds-header-nav>
+            <cds-header-nav-item href="#dashboard" class="nav-link">Dashboard</cds-header-nav-item>
+            <cds-header-nav-item href="#records" class="nav-link">Records</cds-header-nav-item>
+            <cds-header-nav-item href="#recipes" class="nav-link">Recipes</cds-header-nav-item>
+            <cds-header-nav-item href="#master" class="nav-link">Master Data</cds-header-nav-item>
+            <cds-header-nav-item href="#logs" class="nav-link">Logs</cds-header-nav-item>
+        </cds-header-nav>
+        <button class="spotlight-trigger" onclick="openSpotlight()" title="Quick log (\u2318K)">+</button>
+    </cds-header>
     <main id="app"></main>
     <script src="app.js"></script>
 </body>

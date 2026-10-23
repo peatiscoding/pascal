@@ -52,7 +52,7 @@ func main() {
 	}
 	defer queueDB.Close()
 
-	if err := db.Migrate(queueDB, "002_queue.sql"); err != nil {
+	if err := db.Migrate(queueDB, "002_queue.sql", "006_queue_recipe.sql"); err != nil {
 		log.Fatalf("migrate queue db: %v", err)
 	}
 
