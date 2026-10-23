@@ -1,10 +1,12 @@
 const API = window.PASCAL_API_URL || '';
 const BOT_URL = window.PASCAL_BOT_URL || '';
 const app = document.getElementById('app');
+let logSource = null;
 
 // --- Router ---
 
 function route() {
+    if (logSource) { logSource.close(); logSource = null; }
     const hash = location.hash || '#dashboard';
     document.querySelectorAll('.nav-link').forEach(a => {
         a.classList.toggle('active', hash.startsWith(a.getAttribute('href')));
@@ -15,6 +17,7 @@ function route() {
     if (hash === '#recipes') return renderRecipes();
     if (hash === '#recipes/new') return renderRecipeForm(null);
     if (hash.startsWith('#recipes/edit/')) return renderRecipeForm(decodeURIComponent(hash.slice('#recipes/edit/'.length)));
+    if (hash === '#logs') return renderLogs();
     if (hash === '#master') return renderMaster('scopes');
     if (hash === '#master/scopes') return renderMaster('scopes');
     if (hash === '#master/tags') return renderMaster('tags');
@@ -590,6 +593,48 @@ async function deleteScopeItem(id, name) {
     } catch (e) { alert('Error: ' + e.message); }
 }
 
+// --- Logs ---
+
+function renderLogs() {
+    if (logSource) { logSource.close(); logSource = null; }
+
+    app.innerHTML = `
+        <h2 style="margin-bottom:1rem">Bot Logs</h2>
+        <p style="color:#888;font-size:0.85rem;margin-bottom:1rem">Live Discord message stream.</p>
+        <div style="margin-bottom:0.5rem;display:flex;align-items:center;gap:1rem">
+            <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
+            <button id="log-clear" class="btn btn-sm">Clear</button>
+        </div>
+        <div id="log-container" class="log-container"></div>
+    `;
+
+    const container = document.getElementById('log-container');
+    document.getElementById('log-clear').onclick = () => { container.innerHTML = ''; };
+    logSource = new EventSource(API + '/api/logs/bot');
+
+    logSource.onmessage = (e) => {
+        const line = document.createElement('div');
+        line.className = 'log-line';
+        line.textContent = e.data;
+        container.appendChild(line);
+
+        while (container.children.length > 1000) {
+            container.removeChild(container.firstChild);
+        }
+
+        if (document.getElementById('log-autoscroll')?.checked) {
+            container.scrollTop = container.scrollHeight;
+        }
+    };
+
+    logSource.onerror = () => {
+        const line = document.createElement('div');
+        line.className = 'log-line log-error';
+        line.textContent = '[connection lost, retrying...]';
+        container.appendChild(line);
+    };
+}
+
 // --- WebSocket ---
 
 function connectWS() {
@@ -614,7 +659,7 @@ async function updateStatusDots() {
         { id: 'dot-server', url: API + '/api/health' },
         { id: 'dot-bot', url: BOT_URL + '/health' },
         { id: 'dot-web', url: '/health' },
-        { id: 'dot-mcp', url: API + '/api/health' }, // MCP depends on API server
+        { id: 'dot-mcp', url: API + '/api/mcp/probe' },
     ];
     await Promise.all(checks.map(async ({ id, url }) => {
         const dot = document.getElementById(id);

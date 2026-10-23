@@ -8,20 +8,23 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"pascal/internal/api"
 	"pascal/internal/db"
 	"pascal/internal/ollama"
+	"pascal/internal/pidguard"
 	"pascal/internal/worker"
 	"pascal/internal/ws"
 )
 
 func main() {
+	pidguard.Start("runtime/server.pid", 5*time.Second)
 	addr := envOr("PASCAL_ADDR", ":7600")
 	dbPath := envOr("PASCAL_DB", "runtime/pascal.db")
 	queuePath := envOr("PASCAL_QUEUE_DB", "runtime/queue.db")
 	ollamaURL := envOr("OLLAMA_URL", "http://localhost:11434")
-	ollamaModel := envOr("OLLAMA_MODEL", "llama3.2:3b")
+	ollamaModel := envOr("OLLAMA_MODEL", "qwen2.5:7b")
 
 	// Ensure runtime directory exists
 	if dir := filepath.Dir(dbPath); dir != "." {
@@ -65,7 +68,8 @@ func main() {
 	go w.Run(ctx)
 
 	// Start HTTP server
-	srv := api.NewServer(mainDB, queueDB, hub)
+	botLogPath := envOr("PASCAL_BOT_LOG", "runtime/bot.log")
+	srv := api.NewServer(mainDB, queueDB, hub, oc, botLogPath)
 	httpSrv := &http.Server{
 		Addr:    addr,
 		Handler: srv.Router(),

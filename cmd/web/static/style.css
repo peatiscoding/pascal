@@ -136,5 +136,18 @@ tr.clickable { cursor: pointer; }
 .status-dot.ok { background: #16a34a; }
 .status-dot.down { background: #dc2626; }
 
+/* Log viewer */
+.log-container {
+    background: #0d1117; color: #c9d1d9;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+    font-size: 0.8rem; line-height: 1.5;
+    padding: 1rem; border-radius: 8px;
+    height: 500px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-all;
+}
+.log-line { padding: 1px 0; }
+.log-line:hover { background: rgba(255,255,255,0.05); }
+.log-error { color: #f85149; font-style: italic; }
+
 /* Empty state */
 .empty { color: #888; text-align: center; padding: 3rem 1rem; }

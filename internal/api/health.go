@@ -52,9 +52,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) mcpProbe(w http.ResponseWriter, r *http.Request) {
-	// Find MCP binary relative to executable
-	exe, _ := os.Executable()
-	mcpBin := filepath.Join(filepath.Dir(exe), "pascal-mcp")
+	// Find MCP binary: check runtime/ dir first, then next to executable
+	mcpBin := filepath.Join("runtime", "pascal-mcp")
+	if _, err := os.Stat(mcpBin); err != nil {
+		exe, _ := os.Executable()
+		mcpBin = filepath.Join(filepath.Dir(exe), "pascal-mcp")
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()

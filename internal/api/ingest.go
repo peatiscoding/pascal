@@ -50,6 +50,11 @@ func (s *Server) ingestText(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	// TODO: implement webhook ingestion
+	http.Error(w, "not implemented", http.StatusNotImplemented)
+}
+
 func (s *Server) listTags(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.mainDB.Query(`SELECT t.t, t.s, sc.name, t.d FROM tag t LEFT JOIN scope sc ON t.s = sc.id ORDER BY t.t`)
 	if err != nil {

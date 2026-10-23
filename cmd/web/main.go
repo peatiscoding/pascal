@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"pascal/internal/pidguard"
 )
 
 //go:embed static
@@ -16,6 +18,7 @@ var static embed.FS
 var webStartTime = time.Now()
 
 func main() {
+	pidguard.Start("runtime/web.pid", 5*time.Second)
 	addr := envOr("PASCAL_WEB_ADDR", ":7601")
 	apiURL := envOr("PASCAL_API_URL", "http://localhost:7600")
 	botURL := envOr("PASCAL_BOT_URL", "http://localhost:7602")

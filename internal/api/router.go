@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 
+	"pascal/internal/ollama"
 	"pascal/internal/ws"
 
 	"github.com/go-chi/chi/v5"
@@ -11,13 +12,15 @@ import (
 )
 
 type Server struct {
-	mainDB  *sql.DB
-	queueDB *sql.DB
-	hub     *ws.Hub
+	mainDB     *sql.DB
+	queueDB    *sql.DB
+	hub        *ws.Hub
+	ollama     *ollama.Client
+	botLogPath string
 }
 
-func NewServer(mainDB, queueDB *sql.DB, hub *ws.Hub) *Server {
-	return &Server{mainDB: mainDB, queueDB: queueDB, hub: hub}
+func NewServer(mainDB, queueDB *sql.DB, hub *ws.Hub, oc *ollama.Client, botLogPath string) *Server {
+	return &Server{mainDB: mainDB, queueDB: queueDB, hub: hub, ollama: oc, botLogPath: botLogPath}
 }
 
 func cors(next http.Handler) http.Handler {
@@ -42,6 +45,7 @@ func (s *Server) Router() *chi.Mux {
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", s.health)
 		r.Get("/mcp/probe", s.mcpProbe)
+		r.Get("/logs/bot", s.streamBotLog)
 
 		r.Post("/records", s.createRecord)
 		r.Get("/records", s.listRecords)
@@ -72,7 +76,11 @@ func (s *Server) Router() *chi.Mux {
 		r.Put("/recipes/{u}", s.updateRecipe)
 		r.Delete("/recipes/{u}", s.deleteRecipe)
 
-		r.Post("/ingest/text", s.ingestText)
+		r.Route("/ingest", func(r chi.Router) {
+			r.Post("/text", s.ingestText)
+			r.Post("/record", s.createRecord)
+			r.Post("/webhook/{id}", s.handleWebhook)
+		})
 	})
 
 	r.Get("/ws", s.hub.HandleWS)

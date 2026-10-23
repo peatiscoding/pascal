@@ -18,7 +18,7 @@ func New(baseURL, model string) *Client {
 		baseURL = "http://localhost:11434"
 	}
 	if model == "" {
-		model = "llama3.2:3b"
+		model = "qwen2.5:7b"
 	}
 	return &Client{BaseURL: baseURL, Model: model}
 }

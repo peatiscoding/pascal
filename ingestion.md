@@ -6,66 +6,108 @@ Three ingestion paths into `runtime/pascal.db`. Each optimized for different sou
 
 ```mermaid
 flowchart TB
-    subgraph Sources
+    subgraph Discord["Discord (external)"]
+        User[Discord User]
+    end
+
+    subgraph BotProcess["Bot Process (cmd/bot :7602)"]
+        MsgHandler[Message Handler]
+        ThreadMap["Thread Map\nqueue_id ↔ thread_id\n(in-memory)"]
+        WSClient[WebSocket Client]
+        BotHTTP[HTTP Client]
+    end
+
+    subgraph ServerProcess["Server Process (cmd/server :7600)"]
+        subgraph API["HTTP API"]
+            subgraph Ingest["/api/ingest/*"]
+                IngestRecord["/ingest/record"]
+                IngestText["/ingest/text"]
+                IngestGCal["/ingest/gcal"]
+            end
+            WebhookAPI["/api/ingest/webhook/:id"]
+        end
+
+        subgraph Worker["Queue Worker (goroutine)"]
+            Poll[Poll 500ms]
+            RecipeMatch[Recipe Match\nvia Ollama]
+            FieldExtract[Field Extract\nvia Ollama]
+        end
+
+        DirectWrite[Direct Write]
+        CalFetch[Calendar API\nevents.get]
+        WSHub[WebSocket Hub]
+    end
+
+    subgraph External["External Sources"]
         MCP[MCP Client]
         WebUI[Web UI]
-        Bot[Discord Bot]
         Gmail[Gmail Filter]
         Bank[Bank API]
         Scripts[Custom Scripts]
         GCal[Google Calendar]
     end
 
-    subgraph Ingestion["Ingestion Paths"]
-        Structured["/api/records\n(Structured)"]
-        Webhook["/api/webhook/:id\n(Generic Webhook)"]
-        GCalPush["/api/gcal/push\n(Calendar Push)"]
-        Ingest["/api/ingest/text\n(Unstructured)"]
-    end
-
-    subgraph Processing
-        Direct[Direct Write]
-        Queue[(runtime/queue.db)]
-        Worker[Queue Worker]
-        Ollama[Ollama LLM]
-        CalAPI[Calendar API\nevents.get]
-    end
-
+    Ollama[Ollama LLM\nqwen2.5:7b]
+    QueueDB[(runtime/queue.db)]
     PascalDB[(runtime/pascal.db)]
-    WSHub[WebSocket Broadcast]
 
-    MCP --> Structured
-    WebUI --> Structured
-    Structured --> Direct
+    %% Discord Bot → Queue → Worker flow
+    User -->|"@pascal text"| MsgHandler
+    MsgHandler -->|POST text, source| IngestText
+    IngestText --> QueueDB
+    IngestText -->|queue_id| BotHTTP
+    BotHTTP -->|create thread| MsgHandler
+    MsgHandler -->|store mapping| ThreadMap
 
-    Gmail --> Webhook
-    Bank --> Webhook
-    Scripts --> Webhook
-    Webhook -->|has pattern/field_map| Direct
-    Webhook -->|no pattern| Queue
+    QueueDB --> Poll
+    Poll -->|no recipe_u| RecipeMatch
+    RecipeMatch --> Ollama
+    Poll -->|has recipe_u| FieldExtract
+    FieldExtract --> Ollama
 
-    Bot --> Ingest
-    Ingest --> Queue
+    %% Worker push updates via WebSocket
+    RecipeMatch -->|"ambiguous/needs_input"| WSHub
+    FieldExtract -->|"needs_input/done"| WSHub
+    FieldExtract -->|complete| DirectWrite
 
-    GCal -->|push notification| GCalPush
-    GCalPush --> CalAPI
-    CalAPI --> Direct
+    WSHub -->|queue update events| WSClient
+    WSClient --> ThreadMap
+    ThreadMap -->|render message| MsgHandler
+    MsgHandler -->|ask in thread| User
 
-    Queue --> Worker
-    Worker --> Ollama
-    Ollama --> Direct
+    %% User reply → re-queue with recipe_u
+    User -->|reply in thread| MsgHandler
+    MsgHandler -->|POST text + recipe_u| IngestText
 
-    Direct --> PascalDB
+    %% Structured sources (bypass queue)
+    MCP --> IngestRecord
+    WebUI --> IngestRecord
+    IngestRecord --> DirectWrite
+
+    %% Webhook sources
+    Gmail --> WebhookAPI
+    Bank --> WebhookAPI
+    Scripts --> WebhookAPI
+    WebhookAPI -->|has pattern/field_map| DirectWrite
+    WebhookAPI -->|no pattern| QueueDB
+
+    %% Google Calendar
+    GCal -->|push notification| IngestGCal
+    IngestGCal --> CalFetch
+    CalFetch --> DirectWrite
+
+    %% Write path
+    DirectWrite --> PascalDB
     PascalDB -.-> WSHub
 ```
 
-## Path 1: Structured API
+## Path 1: Structured Record
 
 Direct record creation with validated fields.
 
-**Endpoint:** `POST /api/records`
+**Endpoint:** `POST /api/ingest/record` (also available at `POST /api/records`)
 
-**Used by:** MCP interface, Web UI
+**Used by:** MCP interface, Web UI, bot (after queue completes extraction)
 
 **Flow:** Validate → generate UUIDv7 → insert record + tags + values → record_log → WS broadcast
 
@@ -77,7 +119,7 @@ No queue, no inference. Caller provides complete structured data.
 
 Configurable endpoints for external data sources.
 
-**Endpoint:** `POST /api/webhook/:id`
+**Endpoint:** `POST /api/ingest/webhook/:id`
 
 **Network:** Public (VPS)
 
@@ -212,7 +254,7 @@ CREATE TABLE gcal_sync (
 
 | Method | Path | Network | Purpose |
 |---|---|---|---|
-| POST | `/api/gcal/push` | Public | Receive push notification from Google |
+| POST | `/api/ingest/gcal` | Public | Receive push notification from Google |
 | POST | `/api/gcal/setup` | Tailscale | Register watch channel on a calendar |
 | GET | `/api/gcal/sync/:id` | Tailscale | Manual trigger full sync |
 
@@ -220,7 +262,7 @@ CREATE TABLE gcal_sync (
 
 ```mermaid
 flowchart TD
-    Google[Google Calendar] -->|POST with headers only| Push["/api/gcal/push"]
+    Google[Google Calendar] -->|POST with headers only| Push["/api/ingest/gcal"]
     Push --> Verify{Verify channel_token}
     Verify -->|fail| R401[401]
     Verify -->|pass| Lookup[Lookup gcal_sync by channel_id]
@@ -277,7 +319,7 @@ Google Calendar watch channels expire (~7 days). Server needs periodic renewal:
 
 ## Unstructured Ingestion Queue
 
-Shared by unstructured API (`/api/ingest/text`) and pattern-less webhooks.
+Shared by Discord bot (`/api/ingest/text`), and pattern-less webhooks. The queue is the central orchestrator for all unstructured text — it handles recipe matching, field extraction, and communicates back to callers via WebSocket.
 
 ### Queue Schema (runtime/queue.db — separate file)
 
@@ -286,7 +328,8 @@ CREATE TABLE ingest_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     payload TEXT NOT NULL,
     source TEXT NOT NULL,              -- 'discord', 'webhook:cc_kbank', 'api', etc.
-    recipe_hint TEXT,                  -- optional recipe_u for Ollama context
+    recipe_u TEXT,                     -- resolved recipe (NULL = needs matching, set = skip to extract)
+    result TEXT,                       -- JSON: worker output (extracted fields, matched recipes, error detail)
     status TEXT NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
     error TEXT,
@@ -297,48 +340,213 @@ CREATE TABLE ingest_queue (
 CREATE INDEX idx_queue_status ON ingest_queue(status, created_at);
 ```
 
+### Ingest API
+
+**Endpoint:** `POST /api/ingest/text`
+
+```json
+{
+    "text": "Lunch for 200 THB using prompt pay",
+    "source": "discord",
+    "recipe_u": null
+}
+```
+
+- `recipe_u` optional. If set, worker skips recipe matching and goes straight to extraction.
+- Returns `202` with `{"queue_id": 42}`.
+- Caller (e.g. bot) uses `queue_id` to track progress via WebSocket.
+
+### Worker Logic
+
+Single goroutine, polls every 500ms.
+
+```
+pick next pending item from queue
+
+if recipe_u is NULL:
+    → match text against all recipes via Ollama
+    → 0 matches: mark failed, push WS event {type: "queue:no_match", id}
+    → 1 match:  set recipe_u on item, fall through to extract
+    → N matches: set status "ambiguous", store matches in result,
+                 push WS event {type: "queue:ambiguous", id, matches}
+                 (wait for caller to re-queue with chosen recipe_u)
+
+if recipe_u is set:
+    → extract fields via Ollama with full recipe context
+      (recipe description, required values/scopes, available tags/scopes/master_values)
+    → all required fields present:
+        create record via direct write, mark done,
+        push WS event {type: "queue:done", id, record}
+    → missing required fields:
+        set status "needs_input", store partial extraction in result,
+        push WS event {type: "queue:needs_input", id, missing, partial}
+        (wait for caller to re-queue with combined text + recipe_u)
+```
+
+### Queue Statuses
+
+| Status | Meaning | Next action |
+|---|---|---|
+| `pending` | Waiting for worker | Worker picks up |
+| `processing` | Worker is handling | — |
+| `ambiguous` | Multiple recipe matches | Caller re-queues with chosen `recipe_u` |
+| `needs_input` | Missing required fields | Caller re-queues with additional text + `recipe_u` |
+| `done` | Record created | Terminal |
+| `failed` | Unrecoverable error (3 retries or no match) | Terminal |
+
+### WebSocket Events
+
+Worker pushes queue status updates through the existing WebSocket hub. Events:
+
+| Event type | Payload | Meaning |
+|---|---|---|
+| `queue:ambiguous` | `{id, matches: ["recipe_a", "recipe_b"]}` | Multiple recipes matched, pick one |
+| `queue:needs_input` | `{id, missing: ["field"], partial: {...}}` | Extraction incomplete, need more info |
+| `queue:done` | `{id, record: {...}}` | Record created successfully |
+| `queue:no_match` | `{id}` | No recipe matched |
+| `queue:failed` | `{id, error: "..."}` | Processing failed |
+
 ### Worker Rules
 
 - Single goroutine, polls every 500ms
 - Backpressure: reject `429` if pending count > 1000
-- 3 retry attempts, then mark `failed` (dead letter)
-- Idempotent writes via UUIDv7 check (crash recovery)
-- If `recipe_hint` set: include recipe description + required values/tags in Ollama prompt
+- 3 retry attempts for transient errors (Ollama timeout, etc.), then mark `failed`
+- `ambiguous` and `needs_input` are NOT retried — they wait for caller input
 - Separate DB file (`runtime/queue.db`): ephemeral, no WAL contention with main DB, `rm runtime/queue.db` to reset
 
 ### Ollama Prompt Strategy
 
-Without recipe hint:
+**Recipe matching** (no `recipe_u`):
 ```
-Parse this text into a structured record: {payload}
-Return JSON with fields: tl, dt, st, sc, cg, tags, values
+You are a classifier. Given user text and available recipes, return which recipe(s) match.
+
+Available recipes:
+- track_spending: Track daily expenses with amount and payment method
+- meal_log: Log meals with calories and ingredients
+...
+
+Return JSON: {"matches": ["recipe_usecase"]}
+Return empty matches if none fit.
+
+User text: {payload}
 ```
 
-With recipe hint:
+**Field extraction** (with `recipe_u`):
 ```
-Parse this text into a structured record for use case "{recipe.d}".
-Required values: {recipe_values list}
-Required tags: {recipe_tags list}
-Text: {payload}
-Return JSON with fields: tl, dt, st, sc, cg, tags, values
+Extract structured data from user text using the recipe context below.
+
+Recipe: track_spending — Track daily expenses with amount and payment method
+
+Expected values:
+- THB (REQUIRED)
+- payment_method
+
+Available tags: food, transport, entertainment, ...
+Available scopes: Personal, Personal|Finance, Work, ...
+
+Return JSON with fields: tl, dt, st, sc, tags, values, missing
+"missing" = list of REQUIRED fields not found in the text.
+
+User text: {payload}
 ```
 
-Recipe context significantly improves extraction accuracy for known use cases.
+## Discord Bot — Queue-Driven Conversation
+
+The Discord bot uses the queue as the processing backbone. Bot is thin: it posts to the queue, listens for WebSocket updates, and renders Discord messages. All inference happens in the server's queue worker.
+
+### Process Responsibilities
+
+| Process | Role |
+|---|---|
+| **Bot** (`cmd/bot`) | Discord I/O, thread management, queue_id↔thread_id mapping, renders WS events as Discord messages |
+| **Server** (`cmd/server`) | Queue management, recipe matching (Ollama), field extraction (Ollama), record creation, pushes WS events |
+| **Ollama** | LLM inference (called by server worker only) |
+
+### Flow
+
+```mermaid
+sequenceDiagram
+    participant U as Discord User
+    participant B as Bot (cmd/bot)
+    participant S as Server (cmd/server)
+    participant W as Queue Worker (goroutine)
+    participant O as Ollama
+    participant Q as queue.db
+    participant DB as pascal.db
+
+    U->>B: @pascal Lunch for 200 THB
+    B->>S: POST /api/ingest/text<br/>{"text":"Lunch for 200 THB","source":"discord"}
+    S->>Q: INSERT (pending, recipe_u=NULL)
+    S-->>B: 202 {queue_id: 42}
+    B->>B: Create Discord thread, map queue_id=42 ↔ thread
+
+    W->>Q: Poll pending
+    W->>Q: SET processing
+    Note over W: No recipe_u → match recipes
+    W->>O: Classify against recipe list
+    O-->>W: {"matches":["track_spending"]}
+    Note over W: 1 match → set recipe_u, extract
+    W->>O: Extract with recipe context
+    O-->>W: {"tl":"Lunch","values":[{"k":"THB","v":200}],"missing":["payment_method"]}
+
+    W->>Q: SET needs_input, store partial
+    W-->>B: WS: queue:needs_input {id:42, missing:["payment_method"]}
+    B->>U: (in thread) I need: payment_method
+
+    U->>B: prompt pay
+    B->>S: POST /api/ingest/text<br/>{"text":"Lunch for 200 THB\nprompt pay","source":"discord","recipe_u":"track_spending"}
+    S->>Q: INSERT (pending, recipe_u="track_spending")
+    S-->>B: 202 {queue_id: 43}
+    B->>B: Update thread mapping to queue_id=43
+
+    W->>Q: Poll pending
+    Note over W: Has recipe_u → skip match, extract
+    W->>O: Extract with combined text + recipe
+    O-->>W: {"tl":"Lunch","values":[{"k":"THB","v":200}],"tags":["prompt-pay"],"missing":[]}
+    W->>DB: INSERT record
+    W->>Q: SET done
+
+    W-->>B: WS: queue:done {id:43, record:{...}}
+    B->>U: (in thread) Recorded: **Lunch** (THB=200.00)
+```
+
+### Bot State (in-memory)
+
+Bot maintains a lightweight map, not conversation state:
+
+| Map | Key → Value | Purpose |
+|---|---|---|
+| `threadMap` | `queue_id` → `discord_thread_id` | Route WS events to correct Discord thread |
+| `userThreads` | `channelID:userID` → `thread_id` | Track active thread per user for follow-up routing |
+
+No conversation phase tracking. The queue status IS the state. Bot just renders what the server tells it.
+
+### Bot Behavior
+
+1. **New `@pascal` message:** POST to `/api/ingest/text`, create Discord thread, store mapping
+2. **WS `queue:ambiguous`:** Post recipe choices in thread, wait for reply
+3. **WS `queue:needs_input`:** Post missing field list in thread, wait for reply
+4. **WS `queue:done`:** Post confirmation in thread
+5. **WS `queue:no_match` / `queue:failed`:** Post error in thread
+6. **User reply in thread:** Look up thread → last queue context, POST new `/api/ingest/text` with combined text + resolved `recipe_u`
+7. **`cancel`:** Close thread context, no further processing
 
 ## Network Topology
 
 ```
 Internet (Public VPS IP)
-├── POST /api/webhook/:id     ← Gmail, bank, external services
-├── POST /api/gcal/push       ← Google Calendar push notifications
+├── POST /api/ingest/webhook/:id       ← Gmail, bank, external services
+├── POST /api/ingest/gcal       ← Google Calendar push notifications
+├── POST /api/ingest/record     ← (public alias for structured ingestion)
 │
 Tailscale (Internal)
-├── POST /api/records         ← MCP, Web UI
-├── GET  /api/records         ← Web UI
-├── GET  /api/stats           ← Web UI
-├── POST /api/ingest/text     ← Discord bot
-├── POST /api/gcal/setup      ← Admin
-├── GET  /api/gcal/sync/:id   ← Admin
-├── WS   /ws                  ← Web UI
-└── GET  /                    ← Web dashboard
+├── POST /api/ingest/text       ← Discord bot, unstructured sources
+├── POST /api/ingest/record     ← MCP, Web UI (same handler as /api/records)
+├── POST /api/records           ← MCP, Web UI (original path, kept)
+├── GET  /api/records           ← Web UI
+├── GET  /api/stats             ← Web UI
+├── POST /api/gcal/setup        ← Admin
+├── GET  /api/gcal/sync/:id     ← Admin
+├── WS   /ws                    ← Web UI, Bot
+└── GET  /                      ← Web dashboard
 ```

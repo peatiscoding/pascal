@@ -22,29 +22,27 @@ web:
 mcp:
 	go run ./cmd/mcp
 
-dev: dev-kill build
+dev: build
 	@trap 'kill 0' EXIT; \
-	go run ./cmd/server & echo $$! > runtime/server.pid; \
-	go run ./cmd/bot & echo $$! > runtime/bot.pid; \
-	go run ./cmd/web & echo $$! > runtime/web.pid; \
+	go run ./cmd/server & \
+	go run ./cmd/bot & \
+	go run ./cmd/web & \
 	wait
 
-dev-detached: dev-kill build
-	@go run ./cmd/server & echo $$! > runtime/server.pid
-	@go run ./cmd/bot & echo $$! > runtime/bot.pid
-	@go run ./cmd/web & echo $$! > runtime/web.pid
-	@echo "All servers started in background (PIDs in runtime/*.pid)"
+dev-detached: build
+	@go run ./cmd/server &
+	@go run ./cmd/bot &
+	@go run ./cmd/web &
+	@echo "All servers started (pidguard handles old instances)"
 
 dev-kill:
-	@for f in runtime/server.pid runtime/bot.pid runtime/web.pid; do \
-		if [ -f "$$f" ]; then \
-			pid=$$(cat "$$f"); \
-			pkill -P "$$pid" 2>/dev/null || true; \
-			kill "$$pid" 2>/dev/null || true; \
-			echo "Killed $$(basename $$f .pid) (PID $$pid)"; \
-			rm -f "$$f"; \
-		fi; \
-	done
+	@pkill -f "go run ./cmd/server" 2>/dev/null && echo "Killed server (go run)" || true
+	@pkill -f "go run ./cmd/bot" 2>/dev/null && echo "Killed bot (go run)" || true
+	@pkill -f "go run ./cmd/web" 2>/dev/null && echo "Killed web (go run)" || true
+	@pkill -f "go-build.*exe/bot$$" 2>/dev/null && echo "Killed bot (child)" || true
+	@pkill -f "go-build.*exe/server$$" 2>/dev/null && echo "Killed server (child)" || true
+	@pkill -f "go-build.*exe/web$$" 2>/dev/null && echo "Killed web (child)" || true
+	@rm -f runtime/server.pid runtime/bot.pid runtime/web.pid
 	@sleep 0.5
 
 run: build
