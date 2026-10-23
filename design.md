@@ -125,7 +125,8 @@ CREATE TABLE master_value (
 -- Recipe templates
 CREATE TABLE recipe (
     u TEXT PRIMARY KEY,             -- usecase key
-    d TEXT NOT NULL                  -- description
+    d TEXT NOT NULL,                 -- description
+    default_st INTEGER NOT NULL DEFAULT 1  -- default status for records (0=paused,1=todo,2=doing,3=done)
 );
 
 -- Recipe ↔ MasterValue mapping (for MCP interpretation)

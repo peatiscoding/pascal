@@ -167,7 +167,7 @@ func (w *Worker) phaseExtract(item *db.QueueItem, recipeU string) {
 	masterVals, _ := db.ListMasterValues(w.mainDB)
 
 	var ctx strings.Builder
-	fmt.Fprintf(&ctx, "Recipe: %s — %s\n\n", recipe.Usecase, recipe.Description)
+	fmt.Fprintf(&ctx, "Recipe: %s — %s (default status: %d)\n\n", recipe.Usecase, recipe.Description, recipe.DefaultStatus)
 
 	if len(recipe.Values) > 0 {
 		ctx.WriteString("Expected values:\n")
@@ -222,18 +222,23 @@ func (w *Worker) doExtract(item *db.QueueItem, recipeCtx string, tags, scopes []
 		fmt.Fprintf(&promptCtx, "Available scopes: %s\n", strings.Join(scopes, ", "))
 	}
 
+	statusHint := "Default 3 for completed actions, 1 for future tasks."
+	if recipe != nil {
+		statusHint = fmt.Sprintf("Use %d (recipe default) unless text clearly indicates otherwise.", recipe.DefaultStatus)
+	}
+
 	prompt := fmt.Sprintf(`You are a data extraction assistant. Extract structured data from the user text below.
 %s
 Return JSON only with these fields:
 - tl (string): title/summary
 - dt (string, optional): detail
-- st (int): status 0=paused, 1=todo, 2=doing, 3=done. Default 3 for completed actions, 1 for future tasks.
+- st (int): status 0=paused, 1=todo, 2=doing, 3=done. %s
 - sc (string): scope path, pipe-delimited (e.g. "Finance|Spending"). Pick from available scopes.
 - tags (string[]): pick from available tags only
 - values (object[]): each with "k" (value type key) and "v" (number)
 - missing (string[]): list any REQUIRED fields you could not find in the text
 
-User text: %s`, promptCtx.String(), item.Payload)
+User text: %s`, promptCtx.String(), statusHint, item.Payload)
 
 	resp, err := w.ollama.Generate(prompt)
 	if err != nil {

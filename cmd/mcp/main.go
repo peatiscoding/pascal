@@ -157,7 +157,7 @@ func toolDefs() []toolDef {
 					"title":  map[string]any{"type": "string", "description": "Record title (short summary)"},
 					"detail": map[string]any{"type": "string", "description": "Optional longer description"},
 					"scope":  map[string]any{"type": "string", "description": "Scope path (e.g. 'Work|ProjectX'). Use list_scopes to see available scopes."},
-					"status": map[string]any{"type": "integer", "description": "Status code (0=open, 1=done, 2=cancelled). Default 0.", "default": 0},
+					"status": map[string]any{"type": "integer", "description": "Status code (0=paused, 1=todo, 2=doing, 3=done). Omit to use recipe's default status, or 1 if no recipe."},
 					"recipe": map[string]any{"type": "string", "description": "Optional recipe usecase key to associate with this record"},
 					"tags":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tag keys to attach. Use list_tags to see available tags."},
 					"values": map[string]any{
@@ -296,7 +296,9 @@ func doCreateRecord(args map[string]any) (string, bool) {
 	body := map[string]any{
 		"tl": args["title"],
 		"sc": args["scope"],
-		"st": intArg(args, "status", 0),
+	}
+	if v, ok := args["status"]; ok {
+		body["st"] = v
 	}
 	if v, ok := args["detail"]; ok {
 		body["dt"] = v

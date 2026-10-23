@@ -112,6 +112,10 @@ tr.clickable { cursor: pointer; }
 
 /* Badge */
 .badge { display: inline-block; background: #e0e0e0; padding: 0.125rem 0.5rem; font-size: 0.75rem; color: #161616; }
+.badge-st-0 { background: #f4f4f4; color: #6f6f6f; }
+.badge-st-1 { background: #d0e2ff; color: #0043ce; }
+.badge-st-2 { background: #fff1c7; color: #8a6d00; }
+.badge-st-3 { background: #defbe6; color: #198038; }
 
 /* Tabs (master data) */
 .master-tabs { display: flex; gap: 0; border-bottom: 2px solid #e0e0e0; margin-bottom: 1rem; }

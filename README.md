@@ -61,7 +61,8 @@ CREATE TABLE master_value (
 -- Recipe templates
 CREATE TABLE recipe (
     u TEXT PRIMARY KEY,
-    d TEXT NOT NULL
+    d TEXT NOT NULL,
+    default_st INTEGER NOT NULL DEFAULT 1  -- default status for new records
 );
 
 -- Recipe ↔ value mappings (MCP reads these to determine required/optional values)

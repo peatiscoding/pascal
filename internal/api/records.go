@@ -17,7 +17,7 @@ import (
 type createRecordRequest struct {
 	Title  string           `json:"tl"`
 	Detail *string          `json:"dt,omitempty"`
-	Status int              `json:"st"`
+	Status *int             `json:"st,omitempty"`
 	Scope  string           `json:"sc"`
 	Recipe *string          `json:"r,omitempty"`
 	Tags   []string         `json:"tags"`
@@ -36,6 +36,16 @@ func (s *Server) createRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve status: explicit > recipe default > 1
+	status := 1
+	if req.Status != nil {
+		status = *req.Status
+	} else if req.Recipe != nil {
+		if recipe, err := db.GetRecipe(s.mainDB, *req.Recipe); err == nil {
+			status = recipe.DefaultStatus
+		}
+	}
+
 	id, err := uuid.NewV7()
 	if err != nil {
 		http.Error(w, "uuid generation failed", http.StatusInternalServerError)
@@ -48,7 +58,7 @@ func (s *Server) createRecord(w http.ResponseWriter, r *http.Request) {
 			ID:     idBytes,
 			Title:  req.Title,
 			Detail: req.Detail,
-			Status: req.Status,
+			Status: status,
 			Scope:  req.Scope,
 			Recipe: req.Recipe,
 		},

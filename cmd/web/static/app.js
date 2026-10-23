@@ -3,6 +3,9 @@ const BOT_URL = window.PASCAL_BOT_URL || '';
 const app = document.getElementById('app');
 let logSource = null;
 
+const STATUS_LABELS = ['Paused', 'Todo', 'Doing', 'Done'];
+function statusLabel(st) { return `<span class="badge badge-st-${st}">${STATUS_LABELS[st] || st}</span>`; }
+
 // --- Router ---
 
 function route() {
@@ -151,12 +154,13 @@ async function renderRecipes() {
         }
         el.innerHTML = `
             <table>
-                <thead><tr><th>Usecase</th><th>Description</th><th>Scopes</th><th>Values</th></tr></thead>
+                <thead><tr><th>Usecase</th><th>Description</th><th>Default Status</th><th>Scopes</th><th>Values</th></tr></thead>
                 <tbody>
                     ${recipes.map(r => `
                         <tr class="clickable" onclick="location.hash='#recipes/edit/${encodeURIComponent(r.u)}'">
                             <td><strong>${esc(r.u)}</strong></td>
                             <td>${esc(r.d)}</td>
+                            <td>${statusLabel(r.default_st)}</td>
                             <td><span class="badge">${(r.scopes || []).length}</span></td>
                             <td><span class="badge">${(r.values || []).length}</span></td>
                         </tr>
@@ -212,6 +216,13 @@ async function renderRecipeForm(usecase) {
             <div class="form-group">
                 <label>Description</label>
                 <input id="rf-d" value="${esc(recipe.d)}" placeholder="What this recipe captures" required>
+            </div>
+
+            <div class="form-group">
+                <label>Default Status</label>
+                <select id="rf-dst">
+                    ${STATUS_LABELS.map((l, i) => `<option value="${i}" ${(recipe.default_st ?? 1) === i ? 'selected' : ''}>${l}</option>`).join('')}
+                </select>
             </div>
 
             <div class="form-group">
@@ -276,6 +287,7 @@ function addScopeRow(scopeId, required) {
 async function saveRecipe(isEdit) {
     const u = document.getElementById('rf-u').value.trim();
     const d = document.getElementById('rf-d').value.trim();
+    const default_st = parseInt(document.getElementById('rf-dst').value);
     if (!u || !d) return alert('Usecase and description required.');
 
     const values = [...document.querySelectorAll('#rf-values .dynamic-row')].map(row => ({
@@ -288,7 +300,7 @@ async function saveRecipe(isEdit) {
         required: row.querySelector('.rs-req').checked,
     })).filter(s => s.scope_id);
 
-    const body = JSON.stringify({ u, d, values, scopes });
+    const body = JSON.stringify({ u, d, default_st, values, scopes });
 
     try {
         if (isEdit) {

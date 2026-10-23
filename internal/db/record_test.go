@@ -36,7 +36,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 		);
 		CREATE TABLE recipe (
 			u TEXT PRIMARY KEY,
-			d TEXT NOT NULL
+			d TEXT NOT NULL,
+			default_st INTEGER NOT NULL DEFAULT 1
 		);
 		CREATE TABLE record (
 			id BLOB PRIMARY KEY,

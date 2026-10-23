@@ -117,7 +117,7 @@ func (s *Server) extractFields(w http.ResponseWriter, r *http.Request) {
 
 	// Build context for prompt
 	var ctx strings.Builder
-	fmt.Fprintf(&ctx, "Recipe: %s — %s\n\n", recipe.Usecase, recipe.Description)
+	fmt.Fprintf(&ctx, "Recipe: %s — %s (default status: %d)\n\n", recipe.Usecase, recipe.Description, recipe.DefaultStatus)
 
 	if len(recipe.Values) > 0 {
 		ctx.WriteString("Expected values:\n")
@@ -181,19 +181,21 @@ func (s *Server) extractFields(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	statusHint := fmt.Sprintf("Use %d (recipe default) unless text clearly indicates otherwise.", recipe.DefaultStatus)
+
 	prompt := fmt.Sprintf(`You are a data extraction assistant. Extract structured data from user text using the recipe context below.
 
 %s
 Return JSON with these fields:
 - tl (string): title/summary
 - dt (string, optional): detail
-- st (int): status 0=paused, 1=todo, 2=doing, 3=done. Default 3 for completed actions, 1 for future tasks.
+- st (int): status 0=paused, 1=todo, 2=doing, 3=done. %s
 - sc (string): scope path from available scopes, pipe-delimited (e.g. "Finance|Spending")
 - tags (string[]): pick from available tags only
 - values (object[]): each with "k" (master value key) and "v" (number). Extract numeric values from the text.
 - missing (string[]): list any REQUIRED fields you could not find in the text
 
-User text: %s`, ctx.String(), req.Text)
+User text: %s`, ctx.String(), statusHint, req.Text)
 
 	resp, err := s.ollama.Generate(prompt)
 	if err != nil {

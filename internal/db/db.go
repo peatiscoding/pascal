@@ -31,9 +31,8 @@ func Open(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Migrate runs embedded SQL migration files against db.
-// migrationFiles is a list of filenames (e.g. "001_init.sql") to apply.
-func Migrate(db *sql.DB, files ...string) error {
+// Migrate runs all .sql files from migrations/<subdir> against db.
+func Migrate(db *sql.DB, subdir string) error {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS _migrations (
 		filename TEXT PRIMARY KEY,
 		applied_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -42,18 +41,19 @@ func Migrate(db *sql.DB, files ...string) error {
 		return fmt.Errorf("create migrations table: %w", err)
 	}
 
-	if len(files) == 0 {
-		entries, err := fs.ReadDir(migrations, "migrations")
-		if err != nil {
-			return fmt.Errorf("read migrations dir: %w", err)
-		}
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-				files = append(files, e.Name())
-			}
-		}
-		sort.Strings(files)
+	dir := "migrations/" + subdir
+	entries, err := fs.ReadDir(migrations, dir)
+	if err != nil {
+		return fmt.Errorf("read migrations dir %s: %w", dir, err)
 	}
+
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			files = append(files, e.Name())
+		}
+	}
+	sort.Strings(files)
 
 	for _, name := range files {
 		var applied int
@@ -65,7 +65,7 @@ func Migrate(db *sql.DB, files ...string) error {
 			continue
 		}
 
-		content, err := fs.ReadFile(migrations, "migrations/"+name)
+		content, err := fs.ReadFile(migrations, dir+"/"+name)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
 		}

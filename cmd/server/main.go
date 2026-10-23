@@ -41,7 +41,7 @@ func main() {
 	}
 	defer mainDB.Close()
 
-	if err := db.Migrate(mainDB, "001_init.sql", "003_drop_cg.sql", "004_tag_scope.sql", "005_recipe_scopes.sql"); err != nil {
+	if err := db.Migrate(mainDB, "main"); err != nil {
 		log.Fatalf("migrate main db: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func main() {
 	}
 	defer queueDB.Close()
 
-	if err := db.Migrate(queueDB, "002_queue.sql", "006_queue_recipe.sql"); err != nil {
+	if err := db.Migrate(queueDB, "queue"); err != nil {
 		log.Fatalf("migrate queue db: %v", err)
 	}
 
