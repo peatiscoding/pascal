@@ -18,7 +18,6 @@ type createRecordRequest struct {
 	Title  string           `json:"tl"`
 	Detail *string          `json:"dt,omitempty"`
 	Status *int             `json:"st,omitempty"`
-	Scope  string           `json:"sc"`
 	Recipe *string          `json:"r,omitempty"`
 	Tags   []string         `json:"tags"`
 	Values []db.RecordValue `json:"values"`
@@ -31,8 +30,8 @@ func (s *Server) createRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Title == "" || req.Scope == "" {
-		http.Error(w, "tl and sc required", http.StatusBadRequest)
+	if req.Title == "" {
+		http.Error(w, "tl required", http.StatusBadRequest)
 		return
 	}
 
@@ -59,7 +58,6 @@ func (s *Server) createRecord(w http.ResponseWriter, r *http.Request) {
 			Title:  req.Title,
 			Detail: req.Detail,
 			Status: status,
-			Scope:  req.Scope,
 			Recipe: req.Recipe,
 		},
 		Tags:   req.Tags,

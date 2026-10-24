@@ -16,7 +16,7 @@ type StatResult struct {
 }
 
 type StatFilter struct {
-	GroupBy  string  // "sc", "tag", or strftime expression
+	GroupBy  string  // "scope", "tag", or strftime expression
 	ValueKey *string // master_value key to aggregate
 	Scope    *string
 	Tag      *string
@@ -26,14 +26,15 @@ type StatFilter struct {
 
 func QueryStats(db *sql.DB, f StatFilter) ([]StatResult, error) {
 	var groupExpr string
-	var joinClause string
+	var joinClauses []string
 
 	switch f.GroupBy {
-	case "sc":
-		groupExpr = "r.sc"
+	case "scope", "sc":
+		groupExpr = "rt_grp.scope_path"
+		joinClauses = append(joinClauses, "JOIN record_tags rt_grp ON r.id = rt_grp.record_id AND rt_grp.scope_path IS NOT NULL")
 	case "tag":
-		groupExpr = "rt.tag"
-		joinClause = " JOIN record_tags rt ON r.id = rt.record_id"
+		groupExpr = "rt_grp.tag"
+		joinClauses = append(joinClauses, "JOIN record_tags rt_grp ON r.id = rt_grp.record_id")
 	default:
 		// Assume strftime expression like "%Y-%m" for monthly
 		groupExpr = fmt.Sprintf("strftime('%s', r.ct)", f.GroupBy)
@@ -42,25 +43,39 @@ func QueryStats(db *sql.DB, f StatFilter) ([]StatResult, error) {
 	var args []any
 	var where []string
 
-	query := `SELECT ` + groupExpr + ` as grp, COUNT(*) as cnt`
+	query := `SELECT ` + groupExpr + ` as grp, COUNT(DISTINCT r.id) as cnt`
 
 	if f.ValueKey != nil {
 		query += `, COALESCE(SUM(rv.v),0), COALESCE(MIN(rv.v),0), COALESCE(MAX(rv.v),0), COALESCE(AVG(rv.v),0)`
-		joinClause += ` LEFT JOIN record_values rv ON r.id = rv.id AND rv.k = ?`
+		joinClauses = append(joinClauses, `LEFT JOIN record_values rv ON r.id = rv.id AND rv.k = ?`)
 		args = append(args, *f.ValueKey)
 	} else {
 		query += `, 0, 0, 0, 0`
 	}
 
-	query += ` FROM record r` + joinClause
+	query += ` FROM record r`
+	for _, j := range joinClauses {
+		query += " " + j
+	}
 
 	if f.Scope != nil {
-		where = append(where, "r.sc LIKE ?")
+		joinClauses = append(joinClauses, "")
+		// Use separate join if not already grouping by scope
+		if f.GroupBy != "scope" && f.GroupBy != "sc" {
+			query += ` JOIN record_tags rt_sc ON r.id = rt_sc.record_id`
+			where = append(where, "rt_sc.scope_path LIKE ?")
+		} else {
+			where = append(where, "rt_grp.scope_path LIKE ?")
+		}
 		args = append(args, *f.Scope+"%")
 	}
-	if f.Tag != nil && f.GroupBy != "tag" {
-		query += ` JOIN record_tags rt2 ON r.id = rt2.record_id`
-		where = append(where, "rt2.tag = ?")
+	if f.Tag != nil {
+		if f.GroupBy != "tag" {
+			query += ` JOIN record_tags rt_ft ON r.id = rt_ft.record_id`
+			where = append(where, "rt_ft.tag = ?")
+		} else {
+			where = append(where, "rt_grp.tag = ?")
+		}
 		args = append(args, *f.Tag)
 	}
 	if f.From != nil {

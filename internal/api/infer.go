@@ -84,13 +84,12 @@ type extractRequest struct {
 }
 
 type extractResponse struct {
-	Title   string            `json:"tl"`
-	Detail  *string           `json:"dt,omitempty"`
-	Status  int               `json:"st"`
-	Scope   string            `json:"sc"`
-	Tags    []string          `json:"tags"`
-	Values  []db.RecordValue  `json:"values"`
-	Missing []string          `json:"missing,omitempty"` // required fields not found in text
+	Title   string           `json:"tl"`
+	Detail  *string          `json:"dt,omitempty"`
+	Status  int              `json:"st"`
+	Tags    []string         `json:"tags"`
+	Values  []db.RecordValue `json:"values"`
+	Missing []string         `json:"missing,omitempty"`
 }
 
 func (s *Server) extractFields(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +111,6 @@ func (s *Server) extractFields(w http.ResponseWriter, r *http.Request) {
 
 	// Gather master data context
 	tags, _ := s.listTagsData()
-	scopes, _ := s.listScopesData()
 	masterVals, _ := s.listMasterValuesData()
 
 	// Build context for prompt
@@ -138,7 +136,7 @@ func (s *Server) extractFields(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(recipe.Scopes) > 0 {
-		ctx.WriteString("\nExpected scopes:\n")
+		ctx.WriteString("\nRequired tag scopes (must pick a tag from each):\n")
 		for _, sc := range recipe.Scopes {
 			req := ""
 			if sc.Required {
@@ -158,29 +156,6 @@ func (s *Server) extractFields(w http.ResponseWriter, r *http.Request) {
 		ctx.WriteString("\n")
 	}
 
-	if len(scopes) > 0 {
-		ctx.WriteString("\nAvailable scopes: ")
-		names := make([]string, len(scopes))
-		for i, sc := range scopes {
-			names[i] = sc.Name
-		}
-		ctx.WriteString(strings.Join(names, ", "))
-		ctx.WriteString("\n")
-	}
-
-	// Build required fields list
-	var required []string
-	for _, v := range recipe.Values {
-		if v.Required {
-			required = append(required, v.MasterKey)
-		}
-	}
-	for _, sc := range recipe.Scopes {
-		if sc.Required {
-			required = append(required, "scope:"+sc.ScopeName)
-		}
-	}
-
 	statusHint := fmt.Sprintf("Use %d (recipe default) unless text clearly indicates otherwise.", recipe.DefaultStatus)
 
 	prompt := fmt.Sprintf(`You are a data extraction assistant. Extract structured data from user text using the recipe context below.
@@ -190,8 +165,7 @@ Return JSON with these fields:
 - tl (string): title/summary
 - dt (string, optional): detail
 - st (int): status 0=paused, 1=todo, 2=doing, 3=done. %s
-- sc (string): scope path from available scopes, pipe-delimited (e.g. "Finance|Spending")
-- tags (string[]): pick from available tags only
+- tags (string[]): pick from available tags only. Include tags from required scopes.
 - values (object[]): each with "k" (master value key) and "v" (number). Extract numeric values from the text.
 - missing (string[]): list any REQUIRED fields you could not find in the text
 

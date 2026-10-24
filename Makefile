@@ -23,17 +23,19 @@ mcp:
 	go run ./cmd/mcp
 
 dev: build
+	@mkdir -p runtime/logs
 	@trap 'kill 0' EXIT; \
-	go run ./cmd/server & \
-	go run ./cmd/bot & \
-	go run ./cmd/web & \
+	go run ./cmd/server 2>&1 | tee runtime/logs/server.log & \
+	go run ./cmd/bot 2>&1 | tee runtime/logs/bot.log & \
+	go run ./cmd/web 2>&1 | tee runtime/logs/web.log & \
 	wait
 
 dev-detached: build
-	@go run ./cmd/server &
-	@go run ./cmd/bot &
-	@go run ./cmd/web &
-	@echo "All servers started (pidguard handles old instances)"
+	@mkdir -p runtime/logs
+	@go run ./cmd/server >> runtime/logs/server.log 2>&1 &
+	@go run ./cmd/bot >> runtime/logs/bot.log 2>&1 &
+	@go run ./cmd/web >> runtime/logs/web.log 2>&1 &
+	@echo "All servers started. Logs: runtime/logs/{server,bot,web}.log"
 
 dev-kill:
 	@pkill -f "go run ./cmd/server" 2>/dev/null && echo "Killed server (go run)" || true

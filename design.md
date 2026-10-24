@@ -101,7 +101,7 @@ Both use WAL mode. Separate files avoid WAL contention between high-churn queue 
 ### Schema
 
 ```sql
--- Scope hierarchy for autocomplete and validation
+-- Scope hierarchy (tag grouping + multi-dimensional queries)
 CREATE TABLE scope (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -109,10 +109,10 @@ CREATE TABLE scope (
     UNIQUE(name, parent_id)
 );
 
--- Tag definitions (hierarchical)
+-- Tag definitions (scope-based exclusivity)
 CREATE TABLE tag (
     t TEXT PRIMARY KEY,
-    p TEXT REFERENCES tag(t),       -- parent tag
+    s INTEGER REFERENCES scope(id), -- scope (tags sharing a scope are exclusive per record)
     d TEXT NOT NULL                  -- description
 );
 
@@ -137,12 +137,12 @@ CREATE TABLE recipe_values (
     PRIMARY KEY (recipe_u, master_key)
 );
 
--- Recipe ↔ Tag mapping (for MCP interpretation)
-CREATE TABLE recipe_tags (
+-- Recipe ↔ Scope mapping (required scopes per recipe)
+CREATE TABLE recipe_scopes (
     recipe_u TEXT NOT NULL REFERENCES recipe(u) ON DELETE CASCADE,
-    tag TEXT NOT NULL REFERENCES tag(t),
+    scope_id INTEGER NOT NULL REFERENCES scope(id),
     required INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY (recipe_u, tag)
+    PRIMARY KEY (recipe_u, scope_id)
 );
 
 -- Webhook endpoints (see ingestion.md for processing modes)
@@ -177,16 +177,14 @@ CREATE TABLE record (
     dt TEXT,                        -- detail
     st INTEGER NOT NULL DEFAULT 1,  -- 0=paused, 1=todo, 2=doing, 3=done
     ct TEXT NOT NULL DEFAULT (datetime('now')),  -- created at
-    due TEXT,                       -- due date (ISO 8601, nullable)
-    sc TEXT NOT NULL,               -- scope (materialized path: "Work|ProjectX|Epic1")
-    cg TEXT NOT NULL,               -- category
     r TEXT REFERENCES recipe(u)     -- recipe (nullable FK)
 );
 
--- Record ↔ Tag junction
+-- Record ↔ Tag junction (scope_path = materialized path from tag's scope ancestry)
 CREATE TABLE record_tags (
     record_id BLOB NOT NULL REFERENCES record(id) ON DELETE CASCADE,
     tag TEXT NOT NULL REFERENCES tag(t),
+    scope_path TEXT,                -- e.g. "Finance|payment-source", NULL for unscoped tags
     PRIMARY KEY (record_id, tag)
 );
 
@@ -209,11 +207,9 @@ CREATE TABLE record_log (
 -- Indexes
 CREATE INDEX idx_scope_parent ON scope(parent_id);
 CREATE INDEX idx_record_ct ON record(ct);
-CREATE INDEX idx_record_cg ON record(cg);
 CREATE INDEX idx_record_st ON record(st);
-CREATE INDEX idx_record_sc ON record(sc);
-CREATE INDEX idx_record_due ON record(due);
 CREATE INDEX idx_record_tags_tag ON record_tags(tag);
+CREATE INDEX idx_record_tags_scope_path ON record_tags(scope_path);
 CREATE INDEX idx_record_values_k ON record_values(id, k);
 CREATE INDEX idx_record_log_id_at ON record_log(id, at);
 ```
@@ -278,10 +274,10 @@ See **[ingestion.md](ingestion.md)** for detailed webhook/gcal/queue processing 
 
 ## Migrations
 
-- Raw SQL files: `migrations/001_init.sql`, `002_*.sql`, ...
+- Raw SQL files in subdirectories: `migrations/main/001_init.sql`, `migrations/queue/002_queue.sql`, ...
 - Embedded in binary via `go:embed`
-- Applied in order on startup
-- `_migrations` table tracks applied versions
+- Auto-discovered per subdirectory, applied in order on startup
+- `_migrations` table tracks applied versions per database
 
 ## Project Structure
 
@@ -308,7 +304,8 @@ pascal/
 │   └── ws/
 │       └── hub.go           # WebSocket hub + broadcast
 ├── migrations/
-│   └── 001_init.sql
+│   ├── main/           # pascal.db migrations
+│   └── queue/          # queue.db migrations
 ├── web/
 │   ├── index.html
 │   ├── app.js

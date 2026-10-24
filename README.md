@@ -37,7 +37,7 @@ Two SQLite files:
 ### Schema
 
 ```sql
--- Scope hierarchy (autocomplete + validation for materialized paths)
+-- Scope hierarchy (tag grouping + autocomplete)
 CREATE TABLE scope (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -45,10 +45,10 @@ CREATE TABLE scope (
     UNIQUE(name, parent_id)
 );
 
--- Tags (hierarchical, self-referential)
+-- Tags (scope-based exclusivity)
 CREATE TABLE tag (
     t TEXT PRIMARY KEY,
-    p TEXT REFERENCES tag(t),
+    s INTEGER REFERENCES scope(id), -- scope group (exclusive per record)
     d TEXT NOT NULL
 );
 
@@ -73,12 +73,12 @@ CREATE TABLE recipe_values (
     PRIMARY KEY (recipe_u, master_key)
 );
 
--- Recipe ↔ tag mappings (MCP reads these to determine required/optional tags)
-CREATE TABLE recipe_tags (
+-- Recipe ↔ scope mappings (required scopes per recipe)
+CREATE TABLE recipe_scopes (
     recipe_u TEXT NOT NULL REFERENCES recipe(u) ON DELETE CASCADE,
-    tag TEXT NOT NULL REFERENCES tag(t),
+    scope_id INTEGER NOT NULL REFERENCES scope(id),
     required INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY (recipe_u, tag)
+    PRIMARY KEY (recipe_u, scope_id)
 );
 
 -- Webhook endpoints (see ingestion.md for processing modes)
@@ -113,16 +113,14 @@ CREATE TABLE record (
     dt TEXT,                        -- detail
     st INTEGER NOT NULL DEFAULT 1,  -- 0=paused, 1=todo, 2=doing, 3=done
     ct TEXT NOT NULL DEFAULT (datetime('now')),
-    due TEXT,                       -- due date (ISO 8601, nullable)
-    sc TEXT NOT NULL,               -- scope (materialized path, pipe-delimited)
-    cg TEXT NOT NULL,               -- category
     r TEXT REFERENCES recipe(u)     -- nullable
 );
 
--- Record ↔ tag junction
+-- Record ↔ tag junction (with denormalized scope path)
 CREATE TABLE record_tags (
     record_id BLOB NOT NULL REFERENCES record(id) ON DELETE CASCADE,
     tag TEXT NOT NULL REFERENCES tag(t),
+    scope_path TEXT,                -- materialized path from tag's scope ancestry, NULL if unscoped
     PRIMARY KEY (record_id, tag)
 );
 
@@ -147,8 +145,8 @@ CREATE TABLE record_log (
 
 1. Count events over a period — `GROUP BY strftime(ct)`
 2. Aggregate values (sum/min/max/avg) over a period — `JOIN record_values`
-3. Filter aggregations by tags/category — `JOIN record_tags`
-4. Distinct dimension breakdown (pie chart) — `GROUP BY cg`
+3. Filter aggregations by tags — `JOIN record_tags`
+4. Multi-dimensional grouping — `GROUP BY record_tags.scope_path` (e.g. by payment source, category, etc.)
 
 ## API
 
@@ -181,7 +179,9 @@ pascal/
 │   ├── worker/              # Queue worker + Ollama
 │   ├── ollama/              # Ollama HTTP client
 │   └── ws/                  # WebSocket hub
-├── migrations/              # SQL migrations (go:embed)
+├── migrations/
+│   ├── main/              # pascal.db migrations (go:embed)
+│   └── queue/             # queue.db migrations (go:embed)
 ├── web/                     # Static frontend (go:embed)
 ├── go.mod
 └── Makefile

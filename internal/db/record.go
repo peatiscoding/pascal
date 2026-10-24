@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 type Record struct {
@@ -11,7 +12,6 @@ type Record struct {
 	Detail  *string `json:"dt,omitempty"`
 	Status  int     `json:"st"`
 	Created string  `json:"ct"`
-	Scope   string  `json:"sc"`
 	Recipe  *string `json:"r,omitempty"`
 }
 
@@ -22,12 +22,14 @@ type RecordValue struct {
 
 type RecordFull struct {
 	Record
-	Tags   []string      `json:"tags"`
-	Values []RecordValue `json:"values"`
+	Tags       []string      `json:"tags"`
+	Values     []RecordValue `json:"values"`
+	ScopePaths []string      `json:"scope_paths,omitempty"`
 }
 
 // InsertRecord inserts a record with tags and values.
 // Enforces tag exclusivity: only one child tag per parent group.
+// Computes scope_path for each scoped tag.
 func InsertRecord(db *sql.DB, r *RecordFull) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -36,8 +38,8 @@ func InsertRecord(db *sql.DB, r *RecordFull) error {
 	defer tx.Rollback()
 
 	_, err = tx.Exec(
-		`INSERT INTO record (id, tl, dt, st, sc, r) VALUES (?, ?, ?, ?, ?, ?)`,
-		r.ID, r.Title, r.Detail, r.Status, r.Scope, r.Recipe,
+		`INSERT INTO record (id, tl, dt, st, r) VALUES (?, ?, ?, ?, ?)`,
+		r.ID, r.Title, r.Detail, r.Status, r.Recipe,
 	)
 	if err != nil {
 		return fmt.Errorf("insert record: %w", err)
@@ -61,8 +63,28 @@ func InsertRecord(db *sql.DB, r *RecordFull) error {
 	return tx.Commit()
 }
 
+// BuildScopePath walks scope.parent_id chain to build materialized path.
+func BuildScopePath(tx *sql.Tx, scopeID int) (string, error) {
+	var parts []string
+	current := scopeID
+	for {
+		var name string
+		var parentID sql.NullInt64
+		err := tx.QueryRow("SELECT name, parent_id FROM scope WHERE id=?", current).Scan(&name, &parentID)
+		if err != nil {
+			return "", fmt.Errorf("scope %d: %w", current, err)
+		}
+		parts = append([]string{name}, parts...)
+		if !parentID.Valid {
+			break
+		}
+		current = int(parentID.Int64)
+	}
+	return strings.Join(parts, "|"), nil
+}
+
 // insertTagsExclusive inserts tags enforcing: max one tag per scope group.
-// Tags without scope_id have no exclusivity constraint.
+// Computes scope_path for scoped tags.
 func insertTagsExclusive(tx *sql.Tx, recordID []byte, tags []string) error {
 	scopeSeen := map[int]string{} // scope_id -> tag already used
 	for _, tag := range tags {
@@ -71,14 +93,22 @@ func insertTagsExclusive(tx *sql.Tx, recordID []byte, tags []string) error {
 		if err != nil {
 			return fmt.Errorf("lookup tag %s: %w", tag, err)
 		}
+
+		var scopePath *string
 		if scopeID.Valid {
 			sid := int(scopeID.Int64)
 			if existing, ok := scopeSeen[sid]; ok {
 				return fmt.Errorf("tag conflict: '%s' and '%s' share scope (only one per scope allowed)", existing, tag)
 			}
 			scopeSeen[sid] = tag
+			path, err := BuildScopePath(tx, sid)
+			if err != nil {
+				return fmt.Errorf("build scope path for tag %s: %w", tag, err)
+			}
+			scopePath = &path
 		}
-		if _, err := tx.Exec(`INSERT INTO record_tags (record_id, tag) VALUES (?, ?)`, recordID, tag); err != nil {
+
+		if _, err := tx.Exec(`INSERT INTO record_tags (record_id, tag, scope_path) VALUES (?, ?, ?)`, recordID, tag, scopePath); err != nil {
 			return fmt.Errorf("insert tag %s: %w", tag, err)
 		}
 	}
@@ -111,39 +141,12 @@ func UpdateRecordStatus(db *sql.DB, id []byte, status int, info string) error {
 func GetRecord(db *sql.DB, id []byte) (*RecordFull, error) {
 	r := &RecordFull{}
 	err := db.QueryRow(
-		`SELECT id, tl, dt, st, ct, sc, r FROM record WHERE id=?`, id,
-	).Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Scope, &r.Recipe)
+		`SELECT id, tl, dt, st, ct, r FROM record WHERE id=?`, id,
+	).Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Recipe)
 	if err != nil {
 		return nil, err
 	}
-
-	rows, err := db.Query(`SELECT tag FROM record_tags WHERE record_id=?`, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
-			return nil, err
-		}
-		r.Tags = append(r.Tags, t)
-	}
-
-	vrows, err := db.Query(`SELECT k, v FROM record_values WHERE id=?`, id)
-	if err != nil {
-		return nil, err
-	}
-	defer vrows.Close()
-	for vrows.Next() {
-		var rv RecordValue
-		if err := vrows.Scan(&rv.Key, &rv.Value); err != nil {
-			return nil, err
-		}
-		r.Values = append(r.Values, rv)
-	}
-
-	return r, nil
+	return hydrateRecord(db, r)
 }
 
 type RecordFilter struct {
@@ -157,17 +160,23 @@ type RecordFilter struct {
 }
 
 func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
-	query := `SELECT DISTINCT r.id, r.tl, r.dt, r.st, r.ct, r.sc, r.r FROM record r`
+	query := `SELECT DISTINCT r.id, r.tl, r.dt, r.st, r.ct, r.r FROM record r`
 	var args []any
 	var where []string
+	var joins []string
 
 	if f.Tag != nil {
-		query += ` JOIN record_tags rt ON r.id = rt.record_id`
+		joins = append(joins, `JOIN record_tags rt ON r.id = rt.record_id`)
 		where = append(where, "rt.tag = ?")
 		args = append(args, *f.Tag)
 	}
 	if f.Scope != nil {
-		where = append(where, "r.sc LIKE ?")
+		if f.Tag == nil {
+			joins = append(joins, `JOIN record_tags rt_sc ON r.id = rt_sc.record_id`)
+			where = append(where, "rt_sc.scope_path LIKE ?")
+		} else {
+			where = append(where, "rt.scope_path LIKE ?")
+		}
 		args = append(args, *f.Scope+"%")
 	}
 	if f.Status != nil {
@@ -183,6 +192,9 @@ func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
 		args = append(args, *f.To)
 	}
 
+	for _, j := range joins {
+		query += " " + j
+	}
 	if len(where) > 0 {
 		query += " WHERE " + joinAnd(where)
 	}
@@ -203,13 +215,12 @@ func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
 	var records []RecordFull
 	for rows.Next() {
 		var r RecordFull
-		if err := rows.Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Scope, &r.Recipe); err != nil {
+		if err := rows.Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Recipe); err != nil {
 			return nil, err
 		}
 		records = append(records, r)
 	}
 
-	// Hydrate tags and values
 	for i := range records {
 		full, err := hydrateRecord(db, &records[i])
 		if err != nil {
@@ -222,17 +233,21 @@ func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
 }
 
 func hydrateRecord(d *sql.DB, r *RecordFull) (*RecordFull, error) {
-	rows, err := d.Query(`SELECT tag FROM record_tags WHERE record_id=?`, r.ID)
+	rows, err := d.Query(`SELECT tag, scope_path FROM record_tags WHERE record_id=?`, r.ID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var t string
-		if err := rows.Scan(&t); err != nil {
+		var sp sql.NullString
+		if err := rows.Scan(&t, &sp); err != nil {
 			return nil, err
 		}
 		r.Tags = append(r.Tags, t)
+		if sp.Valid {
+			r.ScopePaths = append(r.ScopePaths, sp.String)
+		}
 	}
 
 	vrows, err := d.Query(`SELECT k, v FROM record_values WHERE id=?`, r.ID)

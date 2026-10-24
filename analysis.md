@@ -15,10 +15,12 @@ Single-user, local-network only. No auth needed (trusted network). Ollama depend
 - Dashboard/stats queries go through DuckDB, which can read SQLite files directly via its SQLite scanner:
   ```sql
   ATTACH 'runtime/pascal.db' AS pascal (TYPE sqlite);
-  SELECT cg, COUNT(*), AVG(v)
-  FROM pascal.Record
-  JOIN pascal.RecordValues USING(id)
-  GROUP BY cg;
+  SELECT rt.scope_path, COUNT(DISTINCT r.id), AVG(rv.v)
+  FROM pascal.record r
+  JOIN pascal.record_tags rt ON r.id = rt.record_id
+  JOIN pascal.record_values rv ON r.id = rv.id
+  WHERE rt.scope_path IS NOT NULL
+  GROUP BY rt.scope_path;
   ```
 - No ETL or sync needed — DuckDB queries SQLite in-place
 - Can optionally export to `.parquet` later if dataset grows large
@@ -37,13 +39,19 @@ Single-user, local-network only. No auth needed (trusted network). Ollama depend
 
 ### Issues & Recommendations
 
-#### 2.1 `Record.sc` (scope hierarchy) — materialized path + scope master table
+#### 2.1 Scope hierarchy — multi-dimensional via tags
 
-**Decision:** Keep materialized path in `Record.sc` (e.g., `"Work|ProjectX|Epic1|NewTask"`). Fast prefix queries with `LIKE 'Work|ProjectX|%'`. Shallow hierarchy (3-4 levels), rarely reparented — materialized path is the right fit over closure table or nested sets.
+**Decision:** Scopes are defined in a `scope` master table with parent hierarchy. Tags reference scopes via `tag.s` FK. Records inherit scope dimensions through their tags — no single `record.sc` field.
 
-**Problem:** Need to reuse existing path segments (Project, Epic are reused; Task is usually new). Without a master table, typos create divergent paths and autocomplete requires scanning all records.
+**How it works:**
+- `scope` table defines hierarchy: e.g. Finance → payment-source, Finance → category
+- Tags belong to scopes: e.g. tag "grab" has `s = 3` (scope "payment-source" under "Finance")
+- Tags sharing a scope are **exclusive** per record (one tag per scope per record)
+- `record_tags.scope_path` stores denormalized materialized path at insert time (e.g. "Finance|payment-source")
+- Multi-dimensional grouping: a record with tags from different scopes can be grouped by any dimension via `GROUP BY scope_path`
+- Scope filter uses `scope_path LIKE 'Finance|%'` — fast prefix query via index
 
-**Solution:** Add a `scope` master table for segment authority and autocomplete:
+**Recipe enforcement:** `recipe_scopes` defines required scopes per recipe. On record creation, system validates that extracted tags cover all required scopes.
 
 ```sql
 CREATE TABLE scope (
@@ -52,25 +60,34 @@ CREATE TABLE scope (
     parent_id INTEGER REFERENCES scope(id),
     UNIQUE(name, parent_id)
 );
-CREATE INDEX idx_scope_parent ON scope(parent_id);
+
+CREATE TABLE recipe_scopes (
+    recipe_u TEXT NOT NULL REFERENCES recipe(u) ON DELETE CASCADE,
+    scope_id INTEGER NOT NULL REFERENCES scope(id),
+    required INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (recipe_u, scope_id)
+);
 ```
 
-- Autocomplete queries scope table level-by-level: type `"Work|"` → returns children of "Work"
-- On record creation, validate each segment against scope table; auto-insert new leaf segments
-- `Record.sc` still stores full materialized path string for fast queries — scope table governs valid values, not query path
-- Upper segments (Project, Epic) reused via lookup; leaf segments (Task) auto-created on first use
+#### 2.2 Tags → scope-based junction table
 
-#### 2.2 `Record.tg` as `string[]` → junction table
-
-**Decision:** Replace with junction table. Indexable, supports tag filtering via JOINs.
+**Decision:** Tags reference scopes (not self-referential). Junction table `record_tags` carries denormalized `scope_path`.
 
 ```sql
+CREATE TABLE tag (
+    t TEXT PRIMARY KEY,
+    s INTEGER REFERENCES scope(id), -- scope group
+    d TEXT NOT NULL
+);
+
 CREATE TABLE record_tags (
     record_id BLOB NOT NULL REFERENCES record(id) ON DELETE CASCADE,
     tag TEXT NOT NULL REFERENCES tag(t),
+    scope_path TEXT,                -- materialized path from tag's scope ancestry
     PRIMARY KEY (record_id, tag)
 );
 CREATE INDEX idx_record_tags_tag ON record_tags(tag);
+CREATE INDEX idx_record_tags_scope_path ON record_tags(scope_path);
 ```
 
 #### 2.3 `Record.r` (recipe) → nullable FK
@@ -93,27 +110,27 @@ CREATE INDEX idx_record_tags_tag ON record_tags(tag);
 
 **Decision:** Add `due TEXT` (ISO 8601, nullable) to record table. Enables meeting prep use case: questions scoped under `Meetings|<name>` with `due` set to meeting start time. Also useful for any time-bound task. Overdue query: `WHERE st < 3 AND due < datetime('now')`. Indexed.
 
-#### 2.8 `Recipe.v` and `Recipe.t` → separate tables
+#### 2.8 Recipe mappings → `recipe_values` + `recipe_scopes`
 
-**Decision:** Separate tables. MCP uses this structure to interpret which values/tags are required vs optional for a given recipe. Needs to be queryable, not buried in JSON.
+**Decision:** Separate tables. `recipe_values` maps required/optional value types. `recipe_scopes` maps required scope groups (must have a tag from each). MCP/worker reads these to validate extracted data.
 
 ```sql
 CREATE TABLE recipe_values (
     recipe_u TEXT NOT NULL REFERENCES recipe(u) ON DELETE CASCADE,
     master_key TEXT NOT NULL REFERENCES master_value(k),
-    required INTEGER NOT NULL DEFAULT 1, -- 1=required, 0=optional
+    required INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (recipe_u, master_key)
 );
 
-CREATE TABLE recipe_tags (
+CREATE TABLE recipe_scopes (
     recipe_u TEXT NOT NULL REFERENCES recipe(u) ON DELETE CASCADE,
-    tag TEXT NOT NULL REFERENCES tag(t),
+    scope_id INTEGER NOT NULL REFERENCES scope(id),
     required INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY (recipe_u, tag)
+    PRIMARY KEY (recipe_u, scope_id)
 );
 ```
 
-MCP reads these tables to know: "for recipe X, which values must be provided and which tags must be attached?"
+MCP reads these tables to know: "for recipe X, which values must be provided and which scope groups need a tag?"
 
 ## 3. Component Architecture
 
@@ -209,7 +226,7 @@ Key endpoints:
 | POST | `/api/ingest/text` | Unstructured text → Ollama → record |
 | POST | `/api/records` | Create structured record |
 | PATCH | `/api/records/:id` | Update record (status change → RecordLog) |
-| GET | `/api/records` | Query with filters (tags, category, scope, date range) |
+| GET | `/api/records` | Query with filters (tags, scope, date range) |
 | GET | `/api/stats` | Aggregations (count/sum/min/max/avg by dimension) |
 | GET | `/api/tags` | Tag tree |
 | GET | `/api/recipes` | List recipes |
@@ -253,18 +270,17 @@ README lists four use cases. Checking each:
 | Use Case | Query Pattern | Schema Support | Notes |
 |----------|--------------|----------------|-------|
 | Count events over time | `SELECT COUNT(*) ... GROUP BY strftime(ct)` | ✅ Good | Index on `ct` |
-| Aggregate values over time | `SELECT SUM(v) FROM RecordValues JOIN Record ...` | ✅ Good | Need composite index `(record_id, k)` |
-| Filter aggregates by tags/fields | JOIN with tags, WHERE on category | ⚠️ Needs junction table | `json_each()` works but slow |
-| Pie chart of distinct dimension | `SELECT cg, COUNT(*) GROUP BY cg` | ✅ Good | Works for category; scope needs parsing |
+| Aggregate values over time | `SELECT SUM(v) FROM record_values JOIN record ...` | ✅ Good | Composite index `(id, k)` |
+| Filter aggregates by tags | `JOIN record_tags WHERE tag = ?` | ✅ Good | Junction table with index |
+| Multi-dimensional grouping | `GROUP BY record_tags.scope_path` | ✅ Good | Scope path index, `COUNT(DISTINCT r.id)` avoids dupes |
 
-**Critical indexes needed:**
-- `Record(ct)` — time-range queries
-- `Record(cg)` — category grouping
-- `Record(st)` — status filtering
-- `Record(sc)` — scope prefix matching (if keeping string approach)
-- `RecordValues(id, k)` — value lookups per record
-- `record_tags(tag, record_id)` — tag filtering (if junction table)
-- `RecordLog(id, at)` — audit trail per record
+**Critical indexes:**
+- `record(ct)` — time-range queries
+- `record(st)` — status filtering
+- `record_tags(tag)` — tag filtering
+- `record_tags(scope_path)` — scope grouping and prefix matching
+- `record_values(id, k)` — value lookups per record
+- `record_log(id, at)` — audit trail per record
 
 ## 5. Migration Strategy
 

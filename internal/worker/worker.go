@@ -60,7 +60,6 @@ type extractResult struct {
 	Title   string           `json:"tl"`
 	Detail  *string          `json:"dt,omitempty"`
 	Status  int              `json:"st"`
-	Scope   string           `json:"sc"`
 	Tags    []string         `json:"tags"`
 	Values  []db.RecordValue `json:"values"`
 	Missing []string         `json:"missing,omitempty"`
@@ -163,7 +162,6 @@ func (w *Worker) phaseExtract(item *db.QueueItem, recipeU string) {
 	}
 
 	tags, _ := db.ListTagNames(w.mainDB)
-	scopes, _ := db.ListScopeNames(w.mainDB)
 	masterVals, _ := db.ListMasterValues(w.mainDB)
 
 	var ctx strings.Builder
@@ -189,7 +187,7 @@ func (w *Worker) phaseExtract(item *db.QueueItem, recipeU string) {
 	}
 
 	if len(recipe.Scopes) > 0 {
-		ctx.WriteString("\nExpected scopes:\n")
+		ctx.WriteString("\nRequired tag scopes (must pick a tag from each):\n")
 		for _, sc := range recipe.Scopes {
 			req := ""
 			if sc.Required {
@@ -199,17 +197,15 @@ func (w *Worker) phaseExtract(item *db.QueueItem, recipeU string) {
 		}
 	}
 
-	w.doExtract(item, ctx.String(), tags, scopes, recipe)
+	w.doExtract(item, ctx.String(), tags, recipe)
 }
 
 func (w *Worker) extractNoRecipe(item *db.QueueItem) {
 	tags, _ := db.ListTagNames(w.mainDB)
-	scopes, _ := db.ListScopeNames(w.mainDB)
-
-	w.doExtract(item, "", tags, scopes, nil)
+	w.doExtract(item, "", tags, nil)
 }
 
-func (w *Worker) doExtract(item *db.QueueItem, recipeCtx string, tags, scopes []string, recipe *db.RecipeFull) {
+func (w *Worker) doExtract(item *db.QueueItem, recipeCtx string, tags []string, recipe *db.RecipeFull) {
 	var promptCtx strings.Builder
 	if recipeCtx != "" {
 		promptCtx.WriteString(recipeCtx)
@@ -217,9 +213,6 @@ func (w *Worker) doExtract(item *db.QueueItem, recipeCtx string, tags, scopes []
 	}
 	if len(tags) > 0 {
 		fmt.Fprintf(&promptCtx, "Available tags: %s\n", strings.Join(tags, ", "))
-	}
-	if len(scopes) > 0 {
-		fmt.Fprintf(&promptCtx, "Available scopes: %s\n", strings.Join(scopes, ", "))
 	}
 
 	statusHint := "Default 3 for completed actions, 1 for future tasks."
@@ -233,8 +226,7 @@ Return JSON only with these fields:
 - tl (string): title/summary
 - dt (string, optional): detail
 - st (int): status 0=paused, 1=todo, 2=doing, 3=done. %s
-- sc (string): scope path, pipe-delimited (e.g. "Finance|Spending"). Pick from available scopes.
-- tags (string[]): pick from available tags only
+- tags (string[]): pick from available tags only. Include tags from required scopes.
 - values (object[]): each with "k" (value type key) and "v" (number)
 - missing (string[]): list any REQUIRED fields you could not find in the text
 
@@ -277,7 +269,7 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 		}
 	}
 
-	if hasMissing || result.Title == "" || result.Scope == "" {
+	if hasMissing || result.Title == "" {
 		// Needs user input
 		niResult := needsInputResult{
 			Partial: result,
@@ -312,7 +304,6 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 			Title:  result.Title,
 			Detail: result.Detail,
 			Status: result.Status,
-			Scope:  result.Scope,
 			Recipe: recipeU,
 		},
 		Tags:   result.Tags,

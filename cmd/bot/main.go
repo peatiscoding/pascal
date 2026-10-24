@@ -104,7 +104,6 @@ type extractResponse struct {
 	Title   string        `json:"tl"`
 	Detail  *string       `json:"dt,omitempty"`
 	Status  int           `json:"st"`
-	Scope   string        `json:"sc"`
 	Tags    []string      `json:"tags"`
 	Values  []recordValue `json:"values"`
 	Missing []string      `json:"missing,omitempty"`
@@ -119,7 +118,6 @@ type createRecordRequest struct {
 	Title  string        `json:"tl"`
 	Detail *string       `json:"dt,omitempty"`
 	Status int           `json:"st"`
-	Scope  string        `json:"sc"`
 	Recipe *string       `json:"r,omitempty"`
 	Tags   []string      `json:"tags"`
 	Values []recordValue `json:"values"`
@@ -388,7 +386,6 @@ func apiCreateRecord(serverURL string, ext *extractResponse, recipe string) erro
 		Title:  ext.Title,
 		Detail: ext.Detail,
 		Status: ext.Status,
-		Scope:  ext.Scope,
 		Recipe: &recipe,
 		Tags:   ext.Tags,
 		Values: ext.Values,

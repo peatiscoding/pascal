@@ -156,10 +156,9 @@ func toolDefs() []toolDef {
 				"properties": map[string]any{
 					"title":  map[string]any{"type": "string", "description": "Record title (short summary)"},
 					"detail": map[string]any{"type": "string", "description": "Optional longer description"},
-					"scope":  map[string]any{"type": "string", "description": "Scope path (e.g. 'Work|ProjectX'). Use list_scopes to see available scopes."},
 					"status": map[string]any{"type": "integer", "description": "Status code (0=paused, 1=todo, 2=doing, 3=done). Omit to use recipe's default status, or 1 if no recipe."},
 					"recipe": map[string]any{"type": "string", "description": "Optional recipe usecase key to associate with this record"},
-					"tags":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tag keys to attach. Use list_tags to see available tags."},
+					"tags":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Tag keys to attach. Scoped tags provide dimensional grouping. Use list_tags to see available tags."},
 					"values": map[string]any{
 						"type": "array",
 						"items": map[string]any{
@@ -173,7 +172,7 @@ func toolDefs() []toolDef {
 						"description": "Numeric values to attach. Use list_master_values to see available value types.",
 					},
 				},
-				"required": []string{"title", "scope"},
+				"required": []string{"title"},
 			},
 		},
 		{
@@ -182,7 +181,7 @@ func toolDefs() []toolDef {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"scope":  map[string]any{"type": "string", "description": "Filter by scope prefix"},
+					"scope":  map[string]any{"type": "string", "description": "Filter by scope path prefix (from tag scopes)"},
 					"tag":    map[string]any{"type": "string", "description": "Filter by tag"},
 					"status": map[string]any{"type": "integer", "description": "Filter by status (0=open, 1=done, 2=cancelled)"},
 					"from":   map[string]any{"type": "string", "description": "Start date (ISO 8601)"},
@@ -295,7 +294,6 @@ func callTool(name string, args map[string]any) (string, bool) {
 func doCreateRecord(args map[string]any) (string, bool) {
 	body := map[string]any{
 		"tl": args["title"],
-		"sc": args["scope"],
 	}
 	if v, ok := args["status"]; ok {
 		body["st"] = v

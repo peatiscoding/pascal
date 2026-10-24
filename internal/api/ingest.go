@@ -72,6 +72,20 @@ func (s *Server) getQueueItem(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(item)
 }
 
+func (s *Server) dismissQueueItem(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if err := db.SetQueueResult(s.queueDB, id, "dismissed", ""); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// TODO: implement webhook ingestion
 	http.Error(w, "not implemented", http.StatusNotImplemented)

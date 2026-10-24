@@ -17,7 +17,6 @@ func setupTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("fk: %v", err)
 	}
 
-	// Apply migrations inline (same as 001_init + 003_drop_cg + 004_tag_scope)
 	schema := `
 		CREATE TABLE scope (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,12 +44,12 @@ func setupTestDB(t *testing.T) *sql.DB {
 			dt TEXT,
 			st INTEGER NOT NULL DEFAULT 1,
 			ct TEXT NOT NULL DEFAULT (datetime('now')),
-			sc TEXT NOT NULL,
 			r TEXT REFERENCES recipe(u)
 		);
 		CREATE TABLE record_tags (
 			record_id BLOB NOT NULL REFERENCES record(id) ON DELETE CASCADE,
 			tag TEXT NOT NULL REFERENCES tag(t),
+			scope_path TEXT,
 			PRIMARY KEY (record_id, tag)
 		);
 		CREATE TABLE record_values (
@@ -111,11 +110,20 @@ func TestInsertRecord_FreeTags(t *testing.T) {
 	seedTags(t, db)
 
 	rec := &RecordFull{
-		Record: Record{ID: makeID(1), Title: "test", Status: 1, Scope: "Work"},
+		Record: Record{ID: makeID(1), Title: "test", Status: 1},
 		Tags:   []string{"urgent", "review"}, // both free, should work
 	}
 	if err := InsertRecord(db, rec); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify free tags have no scope_path
+	full, err := GetRecord(db, makeID(1))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(full.ScopePaths) != 0 {
+		t.Fatalf("expected 0 scope_paths for free tags, got %d", len(full.ScopePaths))
 	}
 }
 
@@ -126,11 +134,20 @@ func TestInsertRecord_ScopedTags_OnePerScope(t *testing.T) {
 
 	// One tag per scope group — should work
 	rec := &RecordFull{
-		Record: Record{ID: makeID(2), Title: "test", Status: 1, Scope: "Work"},
+		Record: Record{ID: makeID(2), Title: "test", Status: 1},
 		Tags:   []string{"expense", "high"}, // different scopes
 	}
 	if err := InsertRecord(db, rec); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify scope_paths populated
+	full, err := GetRecord(db, makeID(2))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(full.ScopePaths) != 2 {
+		t.Fatalf("expected 2 scope_paths, got %d: %v", len(full.ScopePaths), full.ScopePaths)
 	}
 }
 
@@ -141,7 +158,7 @@ func TestInsertRecord_ScopedTags_Conflict(t *testing.T) {
 
 	// Two tags from same scope "type" — should fail
 	rec := &RecordFull{
-		Record: Record{ID: makeID(3), Title: "test", Status: 1, Scope: "Work"},
+		Record: Record{ID: makeID(3), Title: "test", Status: 1},
 		Tags:   []string{"expense", "workout"}, // both scope 1
 	}
 	err := InsertRecord(db, rec)
@@ -160,7 +177,7 @@ func TestInsertRecord_MixedTags_ConflictInScope(t *testing.T) {
 
 	// Mix of free + scoped, but two from same scope
 	rec := &RecordFull{
-		Record: Record{ID: makeID(4), Title: "test", Status: 1, Scope: "Work"},
+		Record: Record{ID: makeID(4), Title: "test", Status: 1},
 		Tags:   []string{"urgent", "high", "low"}, // high+low both scope 2
 	}
 	err := InsertRecord(db, rec)
@@ -180,7 +197,7 @@ func TestInsertRecord_MixedTags_NoConflict(t *testing.T) {
 
 	// Free tags + one per scope — should work
 	rec := &RecordFull{
-		Record: Record{ID: makeID(5), Title: "test", Status: 1, Scope: "Work"},
+		Record: Record{ID: makeID(5), Title: "test", Status: 1},
 		Tags:   []string{"urgent", "review", "expense", "high"},
 		Values: []RecordValue{{Key: "THB", Value: 100}},
 	}
@@ -202,13 +219,17 @@ func TestInsertRecord_MixedTags_NoConflict(t *testing.T) {
 	if full.Values[0].Value != 100 {
 		t.Fatalf("expected value 100, got %f", full.Values[0].Value)
 	}
+	// 2 scoped tags = 2 scope_paths
+	if len(full.ScopePaths) != 2 {
+		t.Fatalf("expected 2 scope_paths, got %d: %v", len(full.ScopePaths), full.ScopePaths)
+	}
 }
 
 func TestInsertRecord_NoTags(t *testing.T) {
 	db := setupTestDB(t)
 
 	rec := &RecordFull{
-		Record: Record{ID: makeID(6), Title: "no tags", Status: 1, Scope: "Personal"},
+		Record: Record{ID: makeID(6), Title: "no tags", Status: 1},
 	}
 	if err := InsertRecord(db, rec); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -221,7 +242,7 @@ func TestDeleteRecord(t *testing.T) {
 	seedTags(t, db)
 
 	rec := &RecordFull{
-		Record: Record{ID: makeID(7), Title: "to delete", Status: 1, Scope: "Work"},
+		Record: Record{ID: makeID(7), Title: "to delete", Status: 1},
 		Tags:   []string{"urgent"},
 	}
 	if err := InsertRecord(db, rec); err != nil {
@@ -252,7 +273,7 @@ func TestTagInUse(t *testing.T) {
 
 	// Add record with tag
 	rec := &RecordFull{
-		Record: Record{ID: makeID(8), Title: "test", Status: 1, Scope: "Work"},
+		Record: Record{ID: makeID(8), Title: "test", Status: 1},
 		Tags:   []string{"urgent"},
 	}
 	InsertRecord(db, rec)
@@ -263,6 +284,32 @@ func TestTagInUse(t *testing.T) {
 	}
 	if !used {
 		t.Fatal("expected in use")
+	}
+}
+
+func TestBuildScopePath_Hierarchy(t *testing.T) {
+	db := setupTestDB(t)
+	// Create hierarchy: Finance > Spending
+	db.Exec(`INSERT INTO scope (id, name) VALUES (10, 'Finance')`)
+	db.Exec(`INSERT INTO scope (id, name, parent_id) VALUES (11, 'Spending', 10)`)
+
+	tx, _ := db.Begin()
+	defer tx.Rollback()
+
+	path, err := BuildScopePath(tx, 11)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if path != "Finance|Spending" {
+		t.Fatalf("expected 'Finance|Spending', got '%s'", path)
+	}
+
+	path, err = BuildScopePath(tx, 10)
+	if err != nil {
+		t.Fatalf("build root: %v", err)
+	}
+	if path != "Finance" {
+		t.Fatalf("expected 'Finance', got '%s'", path)
 	}
 }
 

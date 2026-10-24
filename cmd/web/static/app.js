@@ -126,7 +126,9 @@ async function renderRecords() {
         el.innerHTML = records.map(r => `
             <div class="record">
                 <strong>${esc(r.tl)}</strong>
-                <span class="scope">${esc(r.sc)}</span>
+                ${statusLabel(r.st)}
+                ${r.r ? `<span class="badge" style="background:#e8daff;color:#6929c4">/${esc(r.r)}</span>` : ''}
+                ${(r.scope_paths || []).map(sp => `<span class="scope">${esc(sp)}</span>`).join(' ')}
                 ${(r.tags || []).map(t => `<span class="badge">${esc(t)}</span>`).join(' ')}
             </div>
         `).join('');
@@ -618,30 +620,115 @@ function openSpotlight() {
     overlay.className = 'spotlight-overlay';
     overlay.innerHTML = `
         <div class="spotlight-box">
-            <input id="spotlight-input" type="text" placeholder="Log something... e.g. Lunch 200 THB promptpay" autocomplete="off">
+            <input id="spotlight-input" type="text" placeholder="Log something... /expense Lunch 200 THB" autocomplete="off">
             <div id="spotlight-hint" class="spotlight-hint">\u21B5 to send \u00b7 esc to close</div>
+            <div id="spotlight-recipes" class="spotlight-hint" style="display:none"></div>
         </div>
     `;
     document.body.appendChild(overlay);
 
     const input = document.getElementById('spotlight-input');
     const hint = document.getElementById('spotlight-hint');
+    const recipesHint = document.getElementById('spotlight-recipes');
     input.focus();
+
+    // Cache recipes for slash hint
+    let _cachedRecipes = null;
+    async function getRecipes() {
+        if (!_cachedRecipes) _cachedRecipes = await api('/api/recipes').catch(() => []);
+        return _cachedRecipes;
+    }
+
+    let slashMatches = [];
+    let slashIdx = -1; // focused index in slashMatches
 
     overlay.onclick = (e) => { if (e.target === overlay) closeSpotlight(); };
 
+    function renderRecipeHints() {
+        if (slashMatches.length === 0) {
+            recipesHint.innerHTML = '<span style="color:#6f6f6f">no matching recipes</span>';
+            return;
+        }
+        recipesHint.innerHTML = slashMatches.map((r, i) =>
+            `<span class="badge badge-st-${r.default_st}" style="margin:0.125rem;cursor:pointer;${i === slashIdx ? 'outline:2px solid #0f62fe;outline-offset:1px' : ''}" data-ri="${i}">${r.u}</span>`
+        ).join(' ');
+        recipesHint.querySelectorAll('[data-ri]').forEach(el => {
+            el.onclick = () => confirmRecipeChoice(slashMatches[parseInt(el.dataset.ri)].u);
+        });
+    }
+
+    function confirmRecipeChoice(u) {
+        input.value = '/' + u + ' ';
+        input.focus();
+        slashMatches = [];
+        slashIdx = -1;
+        recipesHint.style.display = 'none';
+    }
+
+    input.oninput = async () => {
+        const val = input.value;
+        if (val.startsWith('/') && !val.includes(' ')) {
+            const recipes = await getRecipes();
+            const typed = val.slice(1).toLowerCase();
+            slashMatches = recipes.filter(r => r.u.toLowerCase().startsWith(typed));
+            slashIdx = -1;
+            recipesHint.style.display = 'block';
+            renderRecipeHints();
+        } else {
+            slashMatches = [];
+            slashIdx = -1;
+            recipesHint.style.display = val.startsWith('/') ? 'none' : 'none';
+        }
+    };
+
     input.onkeydown = async (e) => {
         if (e.key === 'Escape') { closeSpotlight(); return; }
+
+        // Tab cycles recipe choices when in slash mode
+        if (e.key === 'Tab' && slashMatches.length > 0) {
+            e.preventDefault();
+            if (slashMatches.length === 1) {
+                confirmRecipeChoice(slashMatches[0].u);
+                return;
+            }
+            slashIdx = (slashIdx + 1) % slashMatches.length;
+            renderRecipeHints();
+            return;
+        }
+
+        // Enter in slash mode: confirm focused choice or single match
+        if (e.key === 'Enter' && slashMatches.length > 0) {
+            e.preventDefault();
+            if (slashMatches.length === 1) {
+                confirmRecipeChoice(slashMatches[0].u);
+            } else if (slashIdx >= 0) {
+                confirmRecipeChoice(slashMatches[slashIdx].u);
+            }
+            // If multiple and none focused, do nothing (need Tab first)
+            return;
+        }
+
         if (e.key === 'Enter') {
-            const text = input.value.trim();
-            if (!text) return;
+            const raw = input.value.trim();
+            if (!raw) return;
+
+            // Block bare /recipe with no text
+            const slashMatch = raw.match(/^\/(\S+)\s+([\s\S]+)/);
+            if (raw.startsWith('/') && !slashMatch) return;
+
+            let payload = { text: raw, source: 'web' };
+            if (slashMatch) {
+                payload = { text: slashMatch[2], source: 'web', recipe_u: slashMatch[1] };
+            }
+
             input.disabled = true;
-            hint.textContent = 'Sending...';
+            hint.textContent = slashMatch ? `Sending with /${slashMatch[1]}...` : 'Sending...';
+            recipesHint.style.display = 'none';
             try {
                 const resp = await fetch(API + '/api/ingest/text', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, source: 'web' }),
+                    body: JSON.stringify(payload),
                 });
                 const data = await resp.json();
                 if (resp.ok) {
@@ -705,6 +792,11 @@ function renderDraft(queueId) {
     draftPollTimer = setInterval(poll, 1500);
 }
 
+async function dismissDraft(id) {
+    await fetch(API + '/api/ingest/text/' + id, { method: 'DELETE' });
+    location.hash = '#ingestion';
+}
+
 function renderDraftContent(item, queueId) {
     const el = document.getElementById('draft-content');
     if (!el) return;
@@ -725,7 +817,7 @@ function renderDraftContent(item, queueId) {
             <div class="draft-status">
                 <p style="color:#dc2626">Failed: ${escHtml(item.error || 'Unknown error')}</p>
                 <p style="color:#888;font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
-                <div style="margin-top:1rem"><a href="#dashboard" class="btn btn-secondary">Back</a> <button class="btn btn-primary" onclick="openSpotlight()">Try again</button></div>
+                <div style="margin-top:1rem"><button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button> <button class="btn btn-primary" onclick="openSpotlight()">Try again</button></div>
             </div>
         `;
         return;
@@ -739,9 +831,10 @@ function renderDraftContent(item, queueId) {
             <div class="draft-status">
                 <p style="color:#16a34a;font-weight:600">Record created!</p>
                 <p style="margin-top:0.5rem"><strong>${escHtml(result.tl || '')}</strong></p>
-                ${result.sc ? `<p style="color:#888;font-size:0.85rem">${escHtml(result.sc)}</p>` : ''}
+                ${(result.tags || []).length ? `<p style="color:#888;font-size:0.85rem">${(result.tags || []).map(t => escHtml(t)).join(', ')}</p>` : ''}
                 <div style="margin-top:1rem">
-                    <a href="#records" class="btn btn-secondary">View Records</a>
+                    <button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button>
+                    <a href="#records" class="btn btn-secondary" style="margin-left:0.5rem">View Records</a>
                     <button class="btn btn-primary" style="margin-left:0.5rem" onclick="openSpotlight()">Log Another</button>
                 </div>
             </div>
@@ -761,6 +854,7 @@ function renderDraftContent(item, queueId) {
                     ${matches.map((r, i) => `<button class="btn btn-secondary" style="margin:0.25rem" data-recipe="${escHtml(r)}">${escHtml(r)}</button>`).join('')}
                 </div>
                 <p style="color:#888;font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
+                <div style="margin-top:0.5rem"><button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button></div>
             </div>
         `;
         document.querySelectorAll('#draft-choices button').forEach(btn => {
@@ -794,10 +888,6 @@ function renderDraftContent(item, queueId) {
                         <input id="draft-tl" value="${escHtml(partial.tl || '')}">
                     </div>
                     <div class="form-group">
-                        <label>Scope</label>
-                        <div id="draft-sc-input"></div>
-                    </div>
-                    <div class="form-group">
                         <label>Tags</label>
                         <div id="draft-tags-input"></div>
                     </div>
@@ -812,6 +902,7 @@ function renderDraftContent(item, queueId) {
                         <textarea id="draft-extra" rows="2" placeholder="Provide missing details..."></textarea>
                     </div>
                     <div class="form-actions">
+                        <button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button>
                         <button id="draft-resubmit" class="btn btn-secondary">Re-process with extra info</button>
                         <button id="draft-save" class="btn btn-primary">Save as-is</button>
                     </div>
@@ -820,16 +911,9 @@ function renderDraftContent(item, queueId) {
         `;
 
         // Wire up autocomplete components after master data loads
-        let tagInput, scopeInput;
+        let tagInput;
         const valueRows = [];
         fetchMasterData().then(master => {
-            const scopeSugs = master.scopes.map(s => ({ value: s.name, label: s.name }));
-            const scopeInitial = (partial.sc || '').split('|').filter(Boolean);
-            scopeInput = createTagInput(
-                document.getElementById('draft-sc-input'), scopeSugs, scopeInitial,
-                { allowNew: false, placeholder: 'Select scope...' }
-            );
-
             const tagSugs = master.tags.map(t => ({
                 value: t.t, label: t.t,
                 hint: t.scope_name ? t.scope_name + (t.d ? ' \u00b7 ' + t.d : '') : (t.d || '')
@@ -886,7 +970,6 @@ function renderDraftContent(item, queueId) {
 
         document.getElementById('draft-save').onclick = async () => {
             const tl = document.getElementById('draft-tl').value.trim();
-            const sc = scopeInput ? scopeInput.getSelected().join('|') : '';
             const tags = tagInput ? tagInput.getSelected() : [];
             const values = [];
             valueRows.forEach(vr => {
@@ -896,13 +979,13 @@ function renderDraftContent(item, queueId) {
                 if (k && !isNaN(v)) values.push({ k, v });
             });
 
-            if (!tl || !sc) { alert('Title and scope required'); return; }
+            if (!tl) { alert('Title required'); return; }
 
             try {
                 await api('/api/records', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tl, sc, st: partial.st || 3, tags, values, r: item.recipe_u }),
+                    body: JSON.stringify({ tl, st: partial.st || 3, tags, values, r: item.recipe_u }),
                 });
                 clearInterval(draftPollTimer);
                 el.innerHTML = `
