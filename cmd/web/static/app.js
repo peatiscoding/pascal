@@ -129,7 +129,7 @@ async function renderRecords() {
                 <strong>${esc(r.tl)}</strong>
                 ${(r.values || []).map(v => `<span class="badge badge-value">${esc(v.k)}: ${v.v}</span>`).join(' ')}
                 ${statusLabel(r.st)}
-                ${r.r ? `<span class="badge" style="background:#e8daff;color:#6929c4">/${esc(r.r)}</span>` : ''}
+                ${r.r ? `<span class="badge" style="background:var(--mod-act-lt);color:var(--mod-act-dk)">/${esc(r.r)}</span>` : ''}
                 ${(r.scope_paths || []).map(sp => `<span class="scope">${esc(sp)}</span>`).join(' ')}
                 ${(r.tags || []).map(t => `<span class="badge">${esc(t)}</span>`).join(' ')}
             </div>
@@ -181,10 +181,10 @@ function showRecordDetail(r) {
                 <h3 style="margin:0;flex:1">${esc(r.tl)}</h3>
                 ${statusLabel(r.st)}
             </div>
-            ${r.dt ? `<p class="record-detail-text">${esc(r.dt)}</p>` : '<p class="record-detail-text" style="color:#8d8d8d">No detail</p>'}
+            ${r.dt ? `<p class="record-detail-text">${esc(r.dt)}</p>` : '<p class="record-detail-text" style="color:var(--ink-4)">No detail</p>'}
             <div class="record-detail-meta">
-                <span style="color:#525252;font-size:0.8125rem">${esc(r.ct)}</span>
-                ${r.r ? `<span class="badge" style="background:#e8daff;color:#6929c4">/${esc(r.r)}</span>` : ''}
+                <span style="color:var(--ink-3);font-size:0.8125rem">${esc(r.ct)}</span>
+                ${r.r ? `<span class="badge" style="background:var(--mod-act-lt);color:var(--mod-act-dk)">/${esc(r.r)}</span>` : ''}
             </div>
             ${(r.values || []).length ? `
                 <div class="record-detail-section">
@@ -268,7 +268,7 @@ async function renderRecipes() {
                         <tr class="clickable" onclick="location.hash='#recipes/edit/${encodeURIComponent(r.u)}'">
                             <td><strong>${esc(r.u)}</strong></td>
                             <td>${esc(r.d)}</td>
-                            <td style="color:#525252;font-size:0.8125rem">${esc(r.ex || '')}</td>
+                            <td style="color:var(--ink-3);font-size:0.8125rem">${esc(r.ex || '')}</td>
                             <td>${statusLabel(r.default_st)}</td>
                             <td><span class="badge">${(r.scopes || []).length}</span></td>
                             <td><span class="badge">${(r.values || []).length}</span></td>
@@ -329,7 +329,7 @@ async function renderRecipeForm(usecase) {
             <div class="form-group">
                 <label>Example Text</label>
                 <input id="rf-ex" value="${esc(recipe.ex || '')}" placeholder="e.g. bought coffee 90 baht with prime card">
-                <small style="color:#8d8d8d">Sample input text to help classify incoming messages</small>
+                <small style="color:var(--ink-4)">Sample input text to help classify incoming messages</small>
             </div>
 
             <div class="form-group">
@@ -445,7 +445,7 @@ async function renderMaster(tab) {
     tab = tab || 'scopes';
     app.innerHTML = `
         <h2 style="margin-bottom:0.5rem">Master Data</h2>
-        <p style="color:#888;font-size:0.85rem;margin-bottom:1rem">Reference tables used by recipes and records. <strong>Scopes</strong> for hierarchy and tag grouping, <strong>Tags</strong> for filtering (scoped tags are exclusive per record), <strong>Values</strong> for aggregation.</p>
+        <p style="color:var(--ink-4);font-size:0.85rem;margin-bottom:1rem">Reference tables used by recipes and records. <strong>Scopes</strong> for hierarchy and tag grouping, <strong>Tags</strong> for filtering (scoped tags are exclusive per record), <strong>Values</strong> for aggregation.</p>
         <div class="master-tabs">
             <a href="#master/scopes" class="tab-btn ${tab === 'scopes' ? 'active' : ''}">Scopes</a>
             <a href="#master/tags" class="tab-btn ${tab === 'tags' ? 'active' : ''}">Tags</a>
@@ -558,7 +558,7 @@ async function renderMasterTags() {
                 <tbody>
                     ${_tagsCache.slice().sort((a, b) => (a.scope_name || '').localeCompare(b.scope_name || '') || a.t.localeCompare(b.t)).map(t => `
                         <tr>
-                            <td>${t.scope_name ? esc(t.scope_name) : '<span style="color:#888">*</span>'}</td>
+                            <td>${t.scope_name ? esc(t.scope_name) : '<span style="color:var(--ink-4)">*</span>'}</td>
                             <td><strong>${esc(t.t)}</strong></td>
                             <td>${t.d ? esc(t.d) : ''}</td>
                             <td style="text-align:right">
@@ -759,11 +759,11 @@ function openSpotlight() {
 
     function renderRecipeHints() {
         if (slashMatches.length === 0) {
-            recipesHint.innerHTML = '<span style="color:#6f6f6f">no matching recipes</span>';
+            recipesHint.innerHTML = '<span style="color:var(--ink-4)">no matching recipes</span>';
             return;
         }
         recipesHint.innerHTML = slashMatches.map((r, i) =>
-            `<span class="badge badge-st-${r.default_st}" style="margin:0.125rem;cursor:pointer;${i === slashIdx ? 'outline:2px solid #0f62fe;outline-offset:1px' : ''}" data-ri="${i}">${r.u}</span>`
+            `<span class="badge badge-st-${r.default_st}" style="margin:0.125rem;cursor:pointer;${i === slashIdx ? 'outline:var(--focus);outline-offset:1px' : ''}" data-ri="${i}">${r.u}</span>`
         ).join(' ');
         recipesHint.querySelectorAll('[data-ri]').forEach(el => {
             el.onclick = () => confirmRecipeChoice(slashMatches[parseInt(el.dataset.ri)].u);
@@ -849,12 +849,12 @@ function openSpotlight() {
                     location.hash = '#draft/' + data.queue_id;
                 } else {
                     hint.textContent = 'Error: ' + (data.error || resp.statusText);
-                    hint.style.color = '#da1e28';
+                    hint.style.color = 'var(--neg)';
                     input.disabled = false;
                 }
             } catch (err) {
                 hint.textContent = 'Error: ' + err.message;
-                hint.style.color = '#da1e28';
+                hint.style.color = 'var(--neg)';
                 input.disabled = false;
             }
         }
@@ -883,21 +883,21 @@ function renderDraft(queueId) {
 
     app.innerHTML = `
         <h2 style="margin-bottom:1rem">Draft #${queueId}</h2>
-        <div id="draft-content"><p style="color:#888">Loading...</p></div>
+        <div id="draft-content"><p style="color:var(--ink-4)">Loading...</p></div>
     `;
 
     async function poll() {
         try {
             const resp = await fetch(API + '/api/ingest/text/' + queueId);
             if (!resp.ok) {
-                document.getElementById('draft-content').innerHTML = `<p style="color:#dc2626">Queue item not found.</p>`;
+                document.getElementById('draft-content').innerHTML = `<p style="color:var(--neg)">Queue item not found.</p>`;
                 clearInterval(draftPollTimer);
                 return;
             }
             const item = await resp.json();
             renderDraftContent(item, queueId);
         } catch (e) {
-            document.getElementById('draft-content').innerHTML = `<p style="color:#dc2626">Error: ${e.message}</p>`;
+            document.getElementById('draft-content').innerHTML = `<p style="color:var(--neg)">Error: ${e.message}</p>`;
         }
     }
 
@@ -918,7 +918,7 @@ function renderDraftContent(item, queueId) {
         el.innerHTML = `
             <div class="draft-status">
                 <p>Processing... <span class="badge">${item.status}</span></p>
-                <p style="color:#888;font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
+                <p style="color:var(--ink-4);font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
             </div>
         `;
         return;
@@ -928,8 +928,8 @@ function renderDraftContent(item, queueId) {
         clearInterval(draftPollTimer);
         el.innerHTML = `
             <div class="draft-status">
-                <p style="color:#dc2626">Failed: ${escHtml(item.error || 'Unknown error')}</p>
-                <p style="color:#888;font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
+                <p style="color:var(--neg)">Failed: ${escHtml(item.error || 'Unknown error')}</p>
+                <p style="color:var(--ink-4);font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
                 <div style="margin-top:1rem"><button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button> <button class="btn btn-primary" onclick="openSpotlight()">Try again</button></div>
             </div>
         `;
@@ -942,9 +942,9 @@ function renderDraftContent(item, queueId) {
         try { result = JSON.parse(item.result || '{}'); } catch {}
         el.innerHTML = `
             <div class="draft-status">
-                <p style="color:#16a34a;font-weight:600">Record created!</p>
+                <p style="color:var(--pos);font-weight:600">Record created!</p>
                 <p style="margin-top:0.5rem"><strong>${escHtml(result.tl || '')}</strong></p>
-                ${(result.tags || []).length ? `<p style="color:#888;font-size:0.85rem">${(result.tags || []).map(t => escHtml(t)).join(', ')}</p>` : ''}
+                ${(result.tags || []).length ? `<p style="color:var(--ink-4);font-size:0.85rem">${(result.tags || []).map(t => escHtml(t)).join(', ')}</p>` : ''}
                 <div style="margin-top:1rem">
                     <button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button>
                     <a href="#records" class="btn btn-secondary" style="margin-left:0.5rem">View Records</a>
@@ -966,7 +966,7 @@ function renderDraftContent(item, queueId) {
                 <div id="draft-choices" style="margin-top:0.5rem">
                     ${matches.map((r, i) => `<button class="btn btn-secondary" style="margin:0.25rem" data-recipe="${escHtml(r)}">${escHtml(r)}</button>`).join('')}
                 </div>
-                <p style="color:#888;font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
+                <p style="color:var(--ink-4);font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
                 <div style="margin-top:0.5rem"><button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button></div>
             </div>
         `;
@@ -994,7 +994,7 @@ function renderDraftContent(item, queueId) {
         el.innerHTML = `
             <div class="draft-status">
                 <p>Almost there! Fill in the missing fields:</p>
-                <p style="color:#888;font-size:0.85rem;margin-top:0.25rem">Input: ${escHtml(item.payload)}</p>
+                <p style="color:var(--ink-4);font-size:0.85rem;margin-top:0.25rem">Input: ${escHtml(item.payload)}</p>
                 <div style="margin-top:1rem">
                     <div class="form-group">
                         <label>Title</label>
@@ -1009,7 +1009,7 @@ function renderDraftContent(item, queueId) {
                         <div id="draft-values"></div>
                         <button type="button" class="add-row" id="draft-add-value">+ Add value</button>
                     </div>
-                    ${missing.length ? `<p style="color:#e67e22;font-size:0.85rem;margin-bottom:0.5rem">Missing: ${missing.join(', ')}</p>` : ''}
+                    ${missing.length ? `<p style="color:var(--warn);font-size:0.85rem;margin-bottom:0.5rem">Missing: ${missing.join(', ')}</p>` : ''}
                     <div class="form-group">
                         <label>Additional info</label>
                         <textarea id="draft-extra" rows="2" placeholder="Provide missing details..."></textarea>
@@ -1103,7 +1103,7 @@ function renderDraftContent(item, queueId) {
                 clearInterval(draftPollTimer);
                 el.innerHTML = `
                     <div class="draft-status">
-                        <p style="color:#16a34a;font-weight:600">Record saved!</p>
+                        <p style="color:var(--pos);font-weight:600">Record saved!</p>
                         <div style="margin-top:1rem">
                             <a href="#records" class="btn btn-secondary">View Records</a>
                             <button class="btn btn-primary" style="margin-left:0.5rem" onclick="openSpotlight()">Log Another</button>
@@ -1266,7 +1266,7 @@ function renderLogs() {
 
     app.innerHTML = `
         <h2 style="margin-bottom:1rem">Bot Logs</h2>
-        <p style="color:#888;font-size:0.85rem;margin-bottom:1rem">Live Discord message stream.</p>
+        <p style="color:var(--ink-4);font-size:0.85rem;margin-bottom:1rem">Live Discord message stream.</p>
         <div style="margin-bottom:0.5rem;display:flex;align-items:center;gap:1rem">
             <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
             <button id="log-clear" class="btn btn-sm">Clear</button>

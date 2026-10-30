@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PASCAL</title>
 
-    <!-- IBM Plex (Carbon's typeface) -->
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+    <!-- PASCAL Design System fonts: Geist (words), Geist Mono (numbers), STIX Two (math) -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=STIX+Two+Text:ital,wght@0,400;1,400;1,500&display=swap">
 
     <!-- Carbon Web Components (per-component, only what we use) -->
     <script type="module" src="https://1.www.s81c.com/common/carbon/web-components/version/v2.66.0/button.min.js"></script>
@@ -35,6 +35,7 @@
         }
     </style>
 
+    <link rel="stylesheet" href="tokens.css">
     <link rel="stylesheet" href="style.css">
     <script src="config.js"></script>
 </head>
@@ -54,7 +55,7 @@
             <cds-header-nav-item href="#master" class="nav-link">Master Data</cds-header-nav-item>
             <cds-header-nav-item href="#logs" class="nav-link">Logs</cds-header-nav-item>
         </cds-header-nav>
-        <button class="spotlight-trigger" onclick="openSpotlight()" title="Quick log (\u2318K)">+</button>
+        <button class="spotlight-trigger" onclick="openSpotlight()" title="Quick log (\u2318K)" aria-label="Quick log">ƒ</button>
     </cds-header>
     <main id="app"></main>
     <script src="app.js"></script>

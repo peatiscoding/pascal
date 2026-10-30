@@ -1,0 +1,83 @@
+/* ==========================================================
+   PASCAL Design System — tokens  (v0.1.1)
+   Every value is derived:
+     type  : fₙ = 12 · 1.25ⁿ   (major third, rounded)
+     space : Fₙ = Fₙ₋₁ + Fₙ₋₂  (Fibonacci)
+     color : contrast(fg, paper) ≥ 4.5 for text
+   ========================================================== */
+:root {
+  /* --- neutrals: ink → paper (ratio vs paper) --- */
+  --ink:    #111318; /* 17.16 */
+  --ink-2:  #2B2F36; /* 12.41 */
+  --ink-3:  #4A4E57; /*  7.70 secondary text */
+  --ink-4:  #686C74; /*  4.87 labels, units */
+  --mute:   #8E9199; /*  2.91 icons, axes only */
+  --line-2: #B9BBC0;
+  --line:   #DCDCD5;
+  --grid:   #ECECE7;
+  --paper:  #F6F6F3;
+  --card:   #FFFFFF;
+
+  /* --- modules: σ ∫ Δ Σ (always paired with the symbol) --- */
+  --mod-stat: #2E4BE0; --mod-stat-dk: #1E36B0; --mod-stat-lt: #E3E8FC;
+  --mod-ctx:  #0B7A6F; --mod-ctx-dk:  #075A52; --mod-ctx-lt:  #DDF0ED;
+  --mod-act:  #C2410C; --mod-act-dk:  #8F2F08; --mod-act-lt:  #FCE6DB;
+  --mod-log:  #3A3F47; --mod-log-dk:  #111318; --mod-log-lt:  #E6E7EA;
+
+  /* --- sign (pair with + / − / ≈) --- */
+  --pos: #1B7F4B; --pos-lt: #DDF2E6;
+  --neg: #C42B2B; --neg-lt: #FBE3E3;
+  --warn:#8A5A0B; --warn-lt:#FBF0D9;
+  --signal: var(--mod-stat); --signal-hover: var(--mod-stat-dk);
+
+  /* --- type --- */
+  --font-sans: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --font-math: 'STIX Two Text', Georgia, serif;
+  --fs-0: 12px;  /* caption  */
+  --fs-1: 15px;  /* body     */
+  --fs-2: 19px;  /* body-lg  */
+  --fs-3: 23px;  /* h4       */
+  --fs-4: 29px;  /* h3       */
+  --fs-5: 37px;  /* h2       */
+  --fs-6: 46px;  /* h1       */
+  --fs-7: 57px;  /* display  */
+  --fs-8: 72px;  /* hero     */
+
+  /* --- space: Fibonacci px --- */
+  --s-1: 2px; --s-2: 3px; --s-3: 5px; --s-4: 8px; --s-5: 13px;
+  --s-6: 21px; --s-7: 34px; --s-8: 55px; --s-9: 89px;
+
+  /* --- shape: Fibonacci radii, no shadows (rules only) --- */
+  --r-0: 0; --r-1: 2px; --r-2: 3px; --r-3: 8px;
+  --rule: 1px solid var(--line);
+  --focus: 2px solid var(--signal);
+
+  /* --- Carbon web components → PASCAL theme --- */
+  --cds-background: var(--paper);
+  --cds-background-brand: var(--ink);
+  --cds-layer-01: var(--card);
+  --cds-layer-02: var(--paper);
+  --cds-field-01: var(--card);
+  --cds-field-02: var(--paper);
+  --cds-text-primary: var(--ink);
+  --cds-text-secondary: var(--ink-3);
+  --cds-text-placeholder: var(--ink-4);
+  --cds-border-subtle-01: var(--line);
+  --cds-border-strong-01: var(--line-2);
+  --cds-interactive: var(--signal);
+  --cds-link-primary: var(--signal);
+  --cds-focus: var(--signal);
+  --cds-button-primary: var(--signal);
+  --cds-button-primary-hover: var(--signal-hover);
+  --cds-button-secondary: var(--ink);
+  --cds-button-danger-primary: var(--neg);
+}
+
+/* --- utilities --- */
+.num  { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.unit { font-family: var(--font-mono); font-size: var(--fs-0); color: var(--ink-4); }
+.math { font-family: var(--font-math); font-style: italic; }
+.sym-stat { color: var(--mod-stat); } .sym-ctx { color: var(--mod-ctx); }
+.sym-act  { color: var(--mod-act);  } .sym-log { color: var(--mod-log); }
+.pos { color: var(--pos); } .neg { color: var(--neg); } .warn { color: var(--warn); }

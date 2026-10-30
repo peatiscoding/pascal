@@ -56,3 +56,11 @@ Network: VPS with public endpoints (webhooks, gcal push) + Tailscale for everyth
 - `design.md` — Full design specification (schema DDL, API, architecture diagram, queue design)
 - `ingestion.md` — Ingestion system design (webhooks, gcal sync, queue, network topology)
 - `analysis.md` — Architecture analysis with decision rationale
+
+## Design System (web UI)
+
+- Tokens live in `cmd/web/static/tokens.css` (loaded before `style.css`). Use `var(--…)` — never hard-coded hex in CSS or `app.js` inline styles.
+- Type: `--fs-0…8` = 12·1.25ⁿ. Fonts: Geist (words), Geist Mono + `.num` (all numbers, tabular), STIX Two italic `.math` (symbols).
+- Space/radius: Fibonacci only (`--s-1…9` = 2,3,5,8,13,21,34,55,89; `--r-*`). No shadows, 1px rules.
+- Modules: σ stats `--mod-stat`, ∫ context `--mod-ctx`, Δ actions `--mod-act`, Σ logging `--mod-log` — always pair color with symbol. Sign: `--pos`/`--neg`/`--warn` with + / − / ≈.
+- Carbon web components are themed via `--cds-*` overrides in `tokens.css`.
