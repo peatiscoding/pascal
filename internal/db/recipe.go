@@ -19,6 +19,7 @@ type RecipeScope struct {
 type RecipeFull struct {
 	Usecase       string        `json:"u"`
 	Description   string        `json:"d"`
+	Example       string        `json:"ex,omitempty"`
 	DefaultStatus int           `json:"default_st"`
 	Values        []RecipeValue `json:"values"`
 	Scopes        []RecipeScope `json:"scopes"`
@@ -26,7 +27,7 @@ type RecipeFull struct {
 
 func GetRecipe(db *sql.DB, usecase string) (*RecipeFull, error) {
 	r := &RecipeFull{}
-	err := db.QueryRow(`SELECT u, d, default_st FROM recipe WHERE u=?`, usecase).Scan(&r.Usecase, &r.Description, &r.DefaultStatus)
+	err := db.QueryRow(`SELECT u, d, ex, default_st FROM recipe WHERE u=?`, usecase).Scan(&r.Usecase, &r.Description, &r.Example, &r.DefaultStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +35,7 @@ func GetRecipe(db *sql.DB, usecase string) (*RecipeFull, error) {
 }
 
 func ListRecipesFull(db *sql.DB) ([]RecipeFull, error) {
-	rows, err := db.Query(`SELECT u, d, default_st FROM recipe ORDER BY u`)
+	rows, err := db.Query(`SELECT u, d, ex, default_st FROM recipe ORDER BY u`)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +44,7 @@ func ListRecipesFull(db *sql.DB) ([]RecipeFull, error) {
 	var recipes []RecipeFull
 	for rows.Next() {
 		var r RecipeFull
-		if err := rows.Scan(&r.Usecase, &r.Description, &r.DefaultStatus); err != nil {
+		if err := rows.Scan(&r.Usecase, &r.Description, &r.Example, &r.DefaultStatus); err != nil {
 			return nil, err
 		}
 		recipes = append(recipes, r)
@@ -104,7 +105,7 @@ func InsertRecipe(db *sql.DB, r *RecipeFull) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`INSERT INTO recipe (u, d, default_st) VALUES (?, ?, ?)`, r.Usecase, r.Description, r.DefaultStatus); err != nil {
+	if _, err := tx.Exec(`INSERT INTO recipe (u, d, ex, default_st) VALUES (?, ?, ?, ?)`, r.Usecase, r.Description, r.Example, r.DefaultStatus); err != nil {
 		return fmt.Errorf("insert recipe: %w", err)
 	}
 
@@ -140,7 +141,7 @@ func UpdateRecipe(db *sql.DB, r *RecipeFull) error {
 	}
 	defer tx.Rollback()
 
-	res, err := tx.Exec(`UPDATE recipe SET d=?, default_st=? WHERE u=?`, r.Description, r.DefaultStatus, r.Usecase)
+	res, err := tx.Exec(`UPDATE recipe SET d=?, ex=?, default_st=? WHERE u=?`, r.Description, r.Example, r.DefaultStatus, r.Usecase)
 	if err != nil {
 		return fmt.Errorf("update recipe: %w", err)
 	}

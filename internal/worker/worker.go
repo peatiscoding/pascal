@@ -110,6 +110,9 @@ func (w *Worker) phaseMatch(item *db.QueueItem) {
 	var recipeList strings.Builder
 	for _, rc := range recipes {
 		fmt.Fprintf(&recipeList, "- %s: %s\n", rc.Usecase, rc.Description)
+		if rc.Example != "" {
+			fmt.Fprintf(&recipeList, "  Examples: %s\n", rc.Example)
+		}
 	}
 
 	prompt := fmt.Sprintf(`You are a classifier. Given user text and a list of available recipes, return which recipe(s) match the user's intent.

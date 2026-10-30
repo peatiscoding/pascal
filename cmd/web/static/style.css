@@ -106,9 +106,25 @@ tr.clickable { cursor: pointer; }
 
 /* Records */
 .record { padding: 0.75rem 0; border-bottom: 1px solid #e0e0e0; display: flex; gap: 1rem; align-items: center; }
+.record:hover { background: #f4f4f4; }
+.record .record-delete { opacity: 0; transition: opacity 0.1s; flex-shrink: 0; }
+.record:hover .record-delete { opacity: 1; }
 .record strong { flex: 1; }
 .record .scope { color: #525252; font-size: 0.75rem; }
 .record .category { color: #161616; font-size: 0.75rem; background: #e0e0e0; padding: 0.125rem 0.5rem; }
+.badge-value { background: #d4edda; color: #155724; font-weight: 600; }
+
+/* Record detail popup */
+.record-detail-box {
+    width: 100%; max-width: 500px;
+    background: #fff; box-shadow: 0 8px 32px rgba(0,0,0,0.24);
+    padding: 1.5rem;
+}
+.record-detail-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+.record-detail-text { margin: 0 0 0.75rem; line-height: 1.5; }
+.record-detail-meta { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+.record-detail-section { margin-top: 0.75rem; }
+.record-detail-label { font-size: 0.75rem; color: #8d8d8d; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.25rem; }
 
 /* Badge */
 .badge { display: inline-block; background: #e0e0e0; padding: 0.125rem 0.5rem; font-size: 0.75rem; color: #161616; }

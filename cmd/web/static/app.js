@@ -5,6 +5,7 @@ let logSource = null;
 
 const STATUS_LABELS = ['Paused', 'Todo', 'Doing', 'Done'];
 function statusLabel(st) { return `<span class="badge badge-st-${st}">${STATUS_LABELS[st] || st}</span>`; }
+function b64ToHex(b64) { return [...atob(b64)].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(''); }
 
 // --- Router ---
 
@@ -124,17 +125,122 @@ async function renderRecords() {
             return;
         }
         el.innerHTML = records.map(r => `
-            <div class="record">
+            <div class="record" data-record='${esc(JSON.stringify(r))}' style="cursor:pointer">
                 <strong>${esc(r.tl)}</strong>
+                ${(r.values || []).map(v => `<span class="badge badge-value">${esc(v.k)}: ${v.v}</span>`).join(' ')}
                 ${statusLabel(r.st)}
                 ${r.r ? `<span class="badge" style="background:#e8daff;color:#6929c4">/${esc(r.r)}</span>` : ''}
                 ${(r.scope_paths || []).map(sp => `<span class="scope">${esc(sp)}</span>`).join(' ')}
                 ${(r.tags || []).map(t => `<span class="badge">${esc(t)}</span>`).join(' ')}
             </div>
         `).join('');
+        el.querySelectorAll('.record').forEach(div => {
+            const r = JSON.parse(div.dataset.record);
+            // Add delete button via DOM (avoids SVG-in-innerHTML parse issues)
+            const btn = document.createElement('cds-button');
+            btn.setAttribute('kind', 'danger--ghost');
+            btn.setAttribute('size', 'sm');
+            btn.setAttribute('tooltip-text', 'Delete');
+            btn.className = 'record-delete';
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('slot', 'icon');
+            svg.setAttribute('width', '16');
+            svg.setAttribute('height', '16');
+            svg.setAttribute('viewBox', '0 0 32 32');
+            svg.setAttribute('fill', 'currentColor');
+            const p1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            p1.setAttribute('d', 'M12 12h2v12h-2zm6 0h2v12h-2z');
+            const p2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            p2.setAttribute('d', 'M4 6v2h2v20a2 2 0 002 2h16a2 2 0 002-2V8h2V6zm4 22V8h16v20zm4-26h8v2h-8z');
+            svg.appendChild(p1);
+            svg.appendChild(p2);
+            btn.appendChild(svg);
+            div.appendChild(btn);
+            div.onclick = (e) => {
+                if (e.target.closest('.record-delete')) return;
+                showRecordDetail(r);
+            };
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                deleteRecord(r);
+            };
+        });
     } catch (e) {
         document.getElementById('records-list').innerHTML = `<p class="empty">Error: ${esc(e.message)}</p>`;
     }
+}
+
+function showRecordDetail(r) {
+    if (document.getElementById('record-detail-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'record-detail-overlay';
+    overlay.className = 'spotlight-overlay';
+    overlay.innerHTML = `
+        <div class="record-detail-box">
+            <div class="record-detail-header">
+                <h3 style="margin:0;flex:1">${esc(r.tl)}</h3>
+                ${statusLabel(r.st)}
+            </div>
+            ${r.dt ? `<p class="record-detail-text">${esc(r.dt)}</p>` : '<p class="record-detail-text" style="color:#8d8d8d">No detail</p>'}
+            <div class="record-detail-meta">
+                <span style="color:#525252;font-size:0.8125rem">${esc(r.ct)}</span>
+                ${r.r ? `<span class="badge" style="background:#e8daff;color:#6929c4">/${esc(r.r)}</span>` : ''}
+            </div>
+            ${(r.values || []).length ? `
+                <div class="record-detail-section">
+                    <div class="record-detail-label">Values</div>
+                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+                        ${r.values.map(v => `<span class="badge badge-value">${esc(v.k)}: ${v.v}</span>`).join('')}
+                    </div>
+                </div>
+            ` : ''}
+            ${(r.tags || []).length ? `
+                <div class="record-detail-section">
+                    <div class="record-detail-label">Tags</div>
+                    <div style="display:flex;gap:0.25rem;flex-wrap:wrap">
+                        ${r.tags.map(t => `<span class="badge">${esc(t)}</span>`).join('')}
+                    </div>
+                </div>
+            ` : ''}
+            ${(r.scope_paths || []).length ? `
+                <div class="record-detail-section">
+                    <div class="record-detail-label">Scopes</div>
+                    <div style="display:flex;gap:0.25rem;flex-wrap:wrap">
+                        ${r.scope_paths.map(sp => `<span class="scope">${esc(sp)}</span>`).join('')}
+                    </div>
+                </div>
+            ` : ''}
+            <div style="margin-top:1rem;display:flex;justify-content:space-between">
+                <button class="btn btn-danger btn-sm" id="record-detail-delete">Delete</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeRecordDetail()">Close</button>
+            </div>
+        </div>
+    `;
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closeRecordDetail();
+    });
+    document.body.appendChild(overlay);
+    document.getElementById('record-detail-delete').onclick = () => deleteRecord(r);
+    document.addEventListener('keydown', recordDetailEsc);
+}
+
+function recordDetailEsc(e) {
+    if (e.key === 'Escape') closeRecordDetail();
+}
+
+function closeRecordDetail() {
+    const el = document.getElementById('record-detail-overlay');
+    if (el) el.remove();
+    document.removeEventListener('keydown', recordDetailEsc);
+}
+
+async function deleteRecord(r) {
+    if (!confirm(`Delete "${r.tl}"?`)) return;
+    try {
+        await api('/api/records/' + b64ToHex(r.id), { method: 'DELETE' });
+        closeRecordDetail();
+        renderRecords();
+    } catch (e) { alert('Error: ' + e.message); }
 }
 
 // --- Recipes List ---
@@ -156,12 +262,13 @@ async function renderRecipes() {
         }
         el.innerHTML = `
             <table>
-                <thead><tr><th>Usecase</th><th>Description</th><th>Default Status</th><th>Scopes</th><th>Values</th></tr></thead>
+                <thead><tr><th>Usecase</th><th>Description</th><th>Example</th><th>Default Status</th><th>Scopes</th><th>Values</th></tr></thead>
                 <tbody>
                     ${recipes.map(r => `
                         <tr class="clickable" onclick="location.hash='#recipes/edit/${encodeURIComponent(r.u)}'">
                             <td><strong>${esc(r.u)}</strong></td>
                             <td>${esc(r.d)}</td>
+                            <td style="color:#525252;font-size:0.8125rem">${esc(r.ex || '')}</td>
                             <td>${statusLabel(r.default_st)}</td>
                             <td><span class="badge">${(r.scopes || []).length}</span></td>
                             <td><span class="badge">${(r.values || []).length}</span></td>
@@ -218,6 +325,11 @@ async function renderRecipeForm(usecase) {
             <div class="form-group">
                 <label>Description</label>
                 <input id="rf-d" value="${esc(recipe.d)}" placeholder="What this recipe captures" required>
+            </div>
+            <div class="form-group">
+                <label>Example Text</label>
+                <input id="rf-ex" value="${esc(recipe.ex || '')}" placeholder="e.g. bought coffee 90 baht with prime card">
+                <small style="color:#8d8d8d">Sample input text to help classify incoming messages</small>
             </div>
 
             <div class="form-group">
@@ -289,6 +401,7 @@ function addScopeRow(scopeId, required) {
 async function saveRecipe(isEdit) {
     const u = document.getElementById('rf-u').value.trim();
     const d = document.getElementById('rf-d').value.trim();
+    const ex = document.getElementById('rf-ex').value.trim();
     const default_st = parseInt(document.getElementById('rf-dst').value);
     if (!u || !d) return alert('Usecase and description required.');
 
@@ -302,7 +415,7 @@ async function saveRecipe(isEdit) {
         required: row.querySelector('.rs-req').checked,
     })).filter(s => s.scope_id);
 
-    const body = JSON.stringify({ u, d, default_st, values, scopes });
+    const body = JSON.stringify({ u, d, ex, default_st, values, scopes });
 
     try {
         if (isEdit) {
