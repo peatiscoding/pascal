@@ -143,8 +143,14 @@ func (s *Server) listRecords(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateRecordRequest struct {
-	Status int    `json:"st"`
-	Info   string `json:"inf"`
+	Title  *string          `json:"tl,omitempty"`
+	Detail *string          `json:"dt,omitempty"`
+	Status *int             `json:"st,omitempty"`
+	Info   string           `json:"inf"`
+	Recipe *string          `json:"r,omitempty"`
+	Tags   []string         `json:"tags,omitempty"`
+	Values []db.RecordValue `json:"values,omitempty"`
+	Full   bool             `json:"full,omitempty"` // true = full update (title/tags/values)
 }
 
 func (s *Server) updateRecord(w http.ResponseWriter, r *http.Request) {
@@ -160,9 +166,30 @@ func (s *Server) updateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := db.UpdateRecordStatus(s.mainDB, id, req.Status, req.Info); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if req.Full {
+		// Full record update
+		if req.Title == nil || *req.Title == "" {
+			http.Error(w, "tl required", http.StatusBadRequest)
+			return
+		}
+		st := 1
+		if req.Status != nil {
+			st = *req.Status
+		}
+		if err := db.UpdateRecord(s.mainDB, id, *req.Title, req.Detail, st, req.Recipe, req.Tags, req.Values); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Status-only update (backward compat)
+		st := 0
+		if req.Status != nil {
+			st = *req.Status
+		}
+		if err := db.UpdateRecordStatus(s.mainDB, id, st, req.Info); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	s.hub.Broadcast(ws.Event{

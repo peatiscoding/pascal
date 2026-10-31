@@ -115,8 +115,94 @@ function formatUptime(sec) {
 
 // --- Records ---
 
+const STATUS_ICONS = ['⏸', '☐', '⚡', '✓'];
+const STATUS_ICON_CLASS = ['st-icon-paused', 'st-icon-todo', 'st-icon-doing', 'st-icon-done'];
+
+function statusIcon(st) {
+    return `<span class="st-icon ${STATUS_ICON_CLASS[st]}" title="${STATUS_LABELS[st]}">${STATUS_ICONS[st]}</span>`;
+}
+
+function recordLine(r) {
+    const tagInfo = (r.tag_info || []);
+    const tagTooltip = tagInfo.length ? esc(tagInfo.map(ti => ti.sp ? ti.sp.replaceAll('|', '.') + ': ' + ti.t : ti.t).join('\n')) : '';
+    const values = (r.values || []);
+    const date = r.ct ? r.ct.slice(0, 10) : '';
+
+    return `<div class="rec-line" data-record='${esc(JSON.stringify(r))}'>
+        <span class="rec-recipe">${r.r ? '/' + esc(r.r) : ''}</span>
+        <span class="rec-st" data-st="${r.st}">${statusIcon(r.st)}</span>
+        <span class="rec-title">${esc(r.tl)}</span>
+        ${tagInfo.length ? `<span class="rec-tags" title="${tagTooltip}"><span class="rec-tag-dots">${tagInfo.map(ti => `<span class="rec-dot${ti.sp ? ' rec-dot-scoped' : ''}"></span>`).join('')}</span></span>` : ''}
+        <span class="rec-spacer"></span>
+        ${values.map(v => `<span class="rec-val"><span class="num">${v.v}</span> <span class="unit">${esc(v.k)}</span></span>`).join('')}
+        ${date ? `<span class="rec-date num">${date}</span>` : ''}
+        <span class="rec-del" title="Delete">×</span>
+    </div>`;
+}
+
+function buildDailyChart(records, valueKey) {
+    const byDay = {};
+    records.forEach(r => {
+        const day = (r.ct || '').slice(0, 10);
+        if (!day) return;
+        (r.values || []).forEach(v => {
+            if (v.k === valueKey) {
+                byDay[day] = (byDay[day] || 0) + v.v;
+            }
+        });
+    });
+    const days = Object.keys(byDay).sort();
+    if (days.length < 2) return '';
+    const vals = days.map(d => byDay[d]);
+    const max = Math.max(...vals);
+    const min = Math.min(...vals, 0);
+    const range = max - min || 1;
+    const w = 280, h = 80, pad = 2;
+    const step = (w - pad * 2) / (days.length - 1);
+    const points = vals.map((v, i) => `${pad + i * step},${h - pad - ((v - min) / range) * (h - pad * 2)}`).join(' ');
+    return `<svg class="rec-chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+        <polyline points="${points}" fill="none" stroke="var(--mod-stat)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>`;
+}
+
+function buildCarousel(groups) {
+    const slides = [];
+    for (const [recipe, records] of Object.entries(groups)) {
+        const valueKeys = new Set();
+        records.forEach(r => (r.values || []).forEach(v => valueKeys.add(v.k)));
+        if (valueKeys.size === 0) continue;
+        for (const k of valueKeys) {
+            const chart = buildDailyChart(records, k);
+            if (!chart) continue;
+            const total = records.reduce((s, r) => s + (r.values || []).reduce((a, v) => v.k === k ? a + v.v : a, 0), 0);
+            slides.push(`<div class="carousel-slide">
+                <div class="carousel-header">
+                    <span class="rec-recipe">/${esc(recipe || '—')}</span>
+                    <span class="num">${total}</span> <span class="unit">${esc(k)}</span>
+                </div>
+                ${chart}
+            </div>`);
+        }
+    }
+    if (slides.length === 0) return '';
+    return `<div class="carousel" id="rec-carousel">
+        <button class="carousel-prev" onclick="carouselNav(-1)">‹</button>
+        <div class="carousel-track">${slides.join('')}</div>
+        <button class="carousel-next" onclick="carouselNav(1)">›</button>
+    </div>`;
+}
+
+window.carouselNav = function(dir) {
+    const track = document.querySelector('.carousel-track');
+    if (!track) return;
+    const slide = track.querySelector('.carousel-slide');
+    if (!slide) return;
+    const slideW = slide.offsetWidth + 13; // gap
+    track.scrollBy({ left: dir * slideW, behavior: 'smooth' });
+};
+
 async function renderRecords() {
-    app.innerHTML = '<h2 style="margin-bottom:1rem">Records</h2><div id="records-list">Loading...</div>';
+    app.innerHTML = '<h2 style="margin-bottom:var(--s-5)">Records</h2><div id="records-list">Loading...</div>';
     try {
         const records = await api('/api/records');
         const el = document.getElementById('records-list');
@@ -124,50 +210,66 @@ async function renderRecords() {
             el.innerHTML = '<p class="empty">No records yet.</p>';
             return;
         }
-        el.innerHTML = records.map(r => `
-            <div class="record" data-record='${esc(JSON.stringify(r))}' style="cursor:pointer">
-                <strong>${esc(r.tl)}</strong>
-                ${(r.values || []).map(v => `<span class="badge badge-value">${esc(v.k)}: ${v.v}</span>`).join(' ')}
-                ${statusLabel(r.st)}
-                ${r.r ? `<span class="badge" style="background:var(--mod-act-lt);color:var(--mod-act-dk)">/${esc(r.r)}</span>` : ''}
-                ${(r.scope_paths || []).map(sp => `<span class="scope">${esc(sp)}</span>`).join(' ')}
-                ${(r.tags || []).map(t => `<span class="badge">${esc(t)}</span>`).join(' ')}
-            </div>
-        `).join('');
-        el.querySelectorAll('.record').forEach(div => {
+
+        // Group by recipe
+        const groups = {};
+        const noRecipe = [];
+        records.forEach(r => {
+            if (r.r) {
+                (groups[r.r] = groups[r.r] || []).push(r);
+            } else {
+                noRecipe.push(r);
+            }
+        });
+
+        // Build carousel for all page
+        const carousel = buildCarousel(groups);
+
+        // Build grouped list
+        let html = carousel;
+        for (const [recipe, recs] of Object.entries(groups)) {
+            html += `<div class="rec-group">
+                <div class="rec-group-header">
+                    <span class="rec-recipe">/${esc(recipe)}</span>
+                    <span class="rec-group-count num">${recs.length}</span>
+                </div>
+                ${recs.map(r => recordLine(r)).join('')}
+            </div>`;
+        }
+        if (noRecipe.length) {
+            html += `<div class="rec-group">
+                <div class="rec-group-header">
+                    <span style="color:var(--ink-4)">Uncategorised</span>
+                    <span class="rec-group-count num">${noRecipe.length}</span>
+                </div>
+                ${noRecipe.map(r => recordLine(r)).join('')}
+            </div>`;
+        }
+
+        el.innerHTML = html;
+
+        // Bind events
+        el.querySelectorAll('.rec-line').forEach(div => {
             const r = JSON.parse(div.dataset.record);
-            // Add delete button via DOM (avoids SVG-in-innerHTML parse issues)
-            const btn = document.createElement('cds-button');
-            btn.setAttribute('kind', 'danger--ghost');
-            btn.setAttribute('size', 'sm');
-            btn.setAttribute('tooltip-text', 'Delete');
-            btn.className = 'record-delete';
-            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('slot', 'icon');
-            svg.setAttribute('width', '16');
-            svg.setAttribute('height', '16');
-            svg.setAttribute('viewBox', '0 0 32 32');
-            svg.setAttribute('fill', 'currentColor');
-            const p1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            p1.setAttribute('d', 'M12 12h2v12h-2zm6 0h2v12h-2z');
-            const p2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            p2.setAttribute('d', 'M4 6v2h2v20a2 2 0 002 2h16a2 2 0 002-2V8h2V6zm4 22V8h16v20zm4-26h8v2h-8z');
-            svg.appendChild(p1);
-            svg.appendChild(p2);
-            btn.appendChild(svg);
-            div.appendChild(btn);
-            div.onclick = (e) => {
-                if (e.target.closest('.record-delete')) return;
-                showRecordDetail(r);
-            };
-            btn.onclick = (e) => {
-                e.stopPropagation();
-                deleteRecord(r);
-            };
+            div.querySelector('.rec-del').onclick = (e) => { e.stopPropagation(); deleteRecord(r); };
+            div.querySelector('.rec-st').onclick = (e) => { e.stopPropagation(); toggleStatus(r); };
+            div.onclick = () => showRecordDetail(r);
         });
     } catch (e) {
         document.getElementById('records-list').innerHTML = `<p class="empty">Error: ${esc(e.message)}</p>`;
     }
+}
+
+async function toggleStatus(r) {
+    const next = r.st === 1 ? 3 : r.st === 3 ? 1 : (r.st + 1) % 4;
+    try {
+        await api('/api/records/' + b64ToHex(r.id), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ st: next })
+        });
+        renderRecords();
+    } catch (e) { alert('Error: ' + e.message); }
 }
 
 function showRecordDetail(r) {
@@ -177,42 +279,39 @@ function showRecordDetail(r) {
     overlay.className = 'spotlight-overlay';
     overlay.innerHTML = `
         <div class="record-detail-box">
-            <div class="record-detail-header">
-                <h3 style="margin:0;flex:1">${esc(r.tl)}</h3>
-                ${statusLabel(r.st)}
-            </div>
-            ${r.dt ? `<p class="record-detail-text">${esc(r.dt)}</p>` : '<p class="record-detail-text" style="color:var(--ink-4)">No detail</p>'}
-            <div class="record-detail-meta">
+            <div class="record-detail-meta" style="margin-bottom:var(--s-5)">
                 <span style="color:var(--ink-3);font-size:0.8125rem">${esc(r.ct)}</span>
                 ${r.r ? `<span class="badge" style="background:var(--mod-act-lt);color:var(--mod-act-dk)">/${esc(r.r)}</span>` : ''}
             </div>
-            ${(r.values || []).length ? `
-                <div class="record-detail-section">
-                    <div class="record-detail-label">Values</div>
-                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-                        ${r.values.map(v => `<span class="badge badge-value">${esc(v.k)}: ${v.v}</span>`).join('')}
-                    </div>
-                </div>
-            ` : ''}
-            ${(r.tags || []).length ? `
-                <div class="record-detail-section">
-                    <div class="record-detail-label">Tags</div>
-                    <div style="display:flex;gap:0.25rem;flex-wrap:wrap">
-                        ${r.tags.map(t => `<span class="badge">${esc(t)}</span>`).join('')}
-                    </div>
-                </div>
-            ` : ''}
-            ${(r.scope_paths || []).length ? `
-                <div class="record-detail-section">
-                    <div class="record-detail-label">Scopes</div>
-                    <div style="display:flex;gap:0.25rem;flex-wrap:wrap">
-                        ${r.scope_paths.map(sp => `<span class="scope">${esc(sp)}</span>`).join('')}
-                    </div>
-                </div>
-            ` : ''}
+            <div class="form-group">
+                <label>Title</label>
+                <input id="rd-tl" value="${esc(r.tl)}">
+            </div>
+            <div class="form-group">
+                <label>Detail</label>
+                <textarea id="rd-dt" rows="2">${esc(r.dt || '')}</textarea>
+            </div>
+            <div class="form-group">
+                <label>Status</label>
+                <select id="rd-st">
+                    ${STATUS_LABELS.map((l, i) => `<option value="${i}" ${i === r.st ? 'selected' : ''}>${l}</option>`).join('')}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Tags</label>
+                <div id="rd-tags"></div>
+            </div>
+            <div class="form-group">
+                <label>Values</label>
+                <div id="rd-values"></div>
+                <button type="button" class="add-row" id="rd-add-value">+ Add value</button>
+            </div>
             <div style="margin-top:1rem;display:flex;justify-content:space-between">
                 <button class="btn btn-danger btn-sm" id="record-detail-delete">Delete</button>
-                <button class="btn btn-secondary btn-sm" onclick="closeRecordDetail()">Close</button>
+                <div style="display:flex;gap:var(--s-4)">
+                    <button class="btn btn-secondary btn-sm" onclick="closeRecordDetail()">Cancel</button>
+                    <button class="btn btn-primary btn-sm" id="record-detail-save">Save</button>
+                </div>
             </div>
         </div>
     `;
@@ -220,7 +319,86 @@ function showRecordDetail(r) {
         if (e.target === overlay) closeRecordDetail();
     });
     document.body.appendChild(overlay);
+
+    // Wire up tag + value inputs
+    let tagInput;
+    const valueRows = [];
+    fetchMasterData().then(master => {
+        const tagSugs = master.tags.map(t => ({
+            value: t.t, label: t.t,
+            hint: t.scope_name ? t.scope_name + (t.d ? ' \u00b7 ' + t.d : '') : (t.d || '')
+        }));
+        tagInput = createTagInput(
+            document.getElementById('rd-tags'), tagSugs, r.tags || [],
+            { allowNew: true, placeholder: 'Add tags...' }
+        );
+
+        const valSugs = master.values.map(v => ({ value: v.k, label: v.k, hint: v.d }));
+        const valContainer = document.getElementById('rd-values');
+
+        function addValueRow(k, v) {
+            const row = document.createElement('div');
+            row.className = 'value-row';
+            const keyBox = document.createElement('div');
+            keyBox.style.flex = '1';
+            const numInput = document.createElement('input');
+            numInput.type = 'number';
+            numInput.placeholder = '0';
+            numInput.value = v ?? '';
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'btn-remove';
+            removeBtn.textContent = '\u00d7';
+            row.appendChild(keyBox);
+            row.appendChild(numInput);
+            row.appendChild(removeBtn);
+            valContainer.appendChild(row);
+
+            const keyCtrl = createTagInput(keyBox, valSugs, k ? [k] : [], {
+                single: true, placeholder: 'Value key...'
+            });
+            const entry = { keyCtrl, numInput, removed: false };
+            valueRows.push(entry);
+            removeBtn.onclick = () => { row.remove(); entry.removed = true; };
+        }
+
+        (r.values || []).forEach(v => addValueRow(v.k, v.v));
+        document.getElementById('rd-add-value').onclick = () => addValueRow('', '');
+    });
+
     document.getElementById('record-detail-delete').onclick = () => deleteRecord(r);
+
+    document.getElementById('record-detail-save').onclick = async () => {
+        const tl = document.getElementById('rd-tl').value.trim();
+        const dt = document.getElementById('rd-dt').value.trim();
+        const st = parseInt(document.getElementById('rd-st').value);
+        const tags = tagInput ? tagInput.getSelected() : [];
+        const values = [];
+        valueRows.forEach(vr => {
+            if (vr.removed) return;
+            const k = vr.keyCtrl.getSelected()[0] || '';
+            const v = parseFloat(vr.numInput.value);
+            if (k && !isNaN(v)) values.push({ k, v });
+        });
+
+        if (!tl) { alert('Title required'); return; }
+
+        try {
+            const body = { full: true, tl, st, tags, values };
+            if (dt) body.dt = dt;
+            if (r.r) body.r = r.r;
+            await api('/api/records/' + b64ToHex(r.id), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            closeRecordDetail();
+            renderRecords();
+        } catch (e) {
+            alert('Error: ' + e.message);
+        }
+    };
+
     document.addEventListener('keydown', recordDetailEsc);
 }
 
@@ -942,16 +1120,119 @@ function renderDraftContent(item, queueId) {
         try { result = JSON.parse(item.result || '{}'); } catch {}
         el.innerHTML = `
             <div class="draft-status">
-                <p style="color:var(--pos);font-weight:600">Record created!</p>
-                <p style="margin-top:0.5rem"><strong>${escHtml(result.tl || '')}</strong></p>
-                ${(result.tags || []).length ? `<p style="color:var(--ink-4);font-size:0.85rem">${(result.tags || []).map(t => escHtml(t)).join(', ')}</p>` : ''}
-                <div style="margin-top:1rem">
+                <p style="color:var(--pos);font-weight:600;margin-bottom:var(--s-5)">Ready to save</p>
+                <p style="color:var(--ink-4);font-size:0.85rem;margin-bottom:var(--s-5)">Input: ${escHtml(item.payload)}</p>
+                <div class="form-group">
+                    <label>Title</label>
+                    <input id="draft-done-tl" value="${escHtml(result.tl || '')}">
+                </div>
+                <div class="form-group">
+                    <label>Detail</label>
+                    <textarea id="draft-done-dt" rows="2">${escHtml(result.dt || '')}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Status</label>
+                    <select id="draft-done-st">
+                        ${STATUS_LABELS.map((l, i) => `<option value="${i}" ${i === (result.st ?? 1) ? 'selected' : ''}>${l}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Tags</label>
+                    <div id="draft-done-tags"></div>
+                </div>
+                <div class="form-group">
+                    <label>Values</label>
+                    <div id="draft-done-values"></div>
+                    <button type="button" class="add-row" id="draft-done-add-value">+ Add value</button>
+                </div>
+                <div class="form-actions">
                     <button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button>
-                    <a href="#records" class="btn btn-secondary" style="margin-left:0.5rem">View Records</a>
-                    <button class="btn btn-primary" style="margin-left:0.5rem" onclick="openSpotlight()">Log Another</button>
+                    <button id="draft-done-save" class="btn btn-primary">Save</button>
                 </div>
             </div>
         `;
+
+        let tagInput;
+        const valueRows = [];
+        fetchMasterData().then(master => {
+            const tagSugs = master.tags.map(t => ({
+                value: t.t, label: t.t,
+                hint: t.scope_name ? t.scope_name + (t.d ? ' \u00b7 ' + t.d : '') : (t.d || '')
+            }));
+            tagInput = createTagInput(
+                document.getElementById('draft-done-tags'), tagSugs, result.tags || [],
+                { allowNew: true, placeholder: 'Add tags...' }
+            );
+
+            const valSugs = master.values.map(v => ({ value: v.k, label: v.k, hint: v.d }));
+            const valContainer = document.getElementById('draft-done-values');
+
+            function addValueRow(k, v) {
+                const row = document.createElement('div');
+                row.className = 'value-row';
+                const keyBox = document.createElement('div');
+                keyBox.style.flex = '1';
+                const numInput = document.createElement('input');
+                numInput.type = 'number';
+                numInput.placeholder = '0';
+                numInput.value = v || '';
+                const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'btn-remove';
+                removeBtn.textContent = '\u00d7';
+                row.appendChild(keyBox);
+                row.appendChild(numInput);
+                row.appendChild(removeBtn);
+                valContainer.appendChild(row);
+
+                const keyCtrl = createTagInput(keyBox, valSugs, k ? [k] : [], {
+                    single: true, placeholder: 'Value key...'
+                });
+                const entry = { keyCtrl, numInput, removed: false };
+                valueRows.push(entry);
+                removeBtn.onclick = () => { row.remove(); entry.removed = true; };
+            }
+
+            (result.values || []).forEach(v => addValueRow(v.k, v.v));
+            document.getElementById('draft-done-add-value').onclick = () => addValueRow('', '');
+        });
+
+        document.getElementById('draft-done-save').onclick = async () => {
+            const tl = document.getElementById('draft-done-tl').value.trim();
+            const dt = document.getElementById('draft-done-dt').value.trim();
+            const st = parseInt(document.getElementById('draft-done-st').value);
+            const tags = tagInput ? tagInput.getSelected() : [];
+            const values = [];
+            valueRows.forEach(vr => {
+                if (vr.removed) return;
+                const k = vr.keyCtrl.getSelected()[0] || '';
+                const v = parseFloat(vr.numInput.value);
+                if (k && !isNaN(v)) values.push({ k, v });
+            });
+
+            if (!tl) { alert('Title required'); return; }
+
+            try {
+                const body = { tl, st, tags, values, r: item.recipe_u };
+                if (dt) body.dt = dt;
+                await api('/api/records', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                el.innerHTML = `
+                    <div class="draft-status">
+                        <p style="color:var(--pos);font-weight:600">Record saved!</p>
+                        <div style="margin-top:1rem">
+                            <a href="#records" class="btn btn-secondary">View Records</a>
+                            <button class="btn btn-primary" style="margin-left:0.5rem" onclick="openSpotlight()">Log Another</button>
+                        </div>
+                    </div>
+                `;
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        };
         return;
     }
 

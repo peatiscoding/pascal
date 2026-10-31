@@ -20,11 +20,17 @@ type RecordValue struct {
 	Value float64 `json:"v"`
 }
 
+type RecordTag struct {
+	Tag       string  `json:"t"`
+	ScopePath *string `json:"sp,omitempty"`
+}
+
 type RecordFull struct {
 	Record
 	Tags       []string      `json:"tags"`
 	Values     []RecordValue `json:"values"`
 	ScopePaths []string      `json:"scope_paths,omitempty"`
+	TagInfo    []RecordTag   `json:"tag_info,omitempty"`
 }
 
 // InsertRecord inserts a record with tags and values.
@@ -113,6 +119,48 @@ func insertTagsExclusive(tx *sql.Tx, recordID []byte, tags []string) error {
 		}
 	}
 	return nil
+}
+
+func UpdateRecord(d *sql.DB, id []byte, title string, detail *string, status int, recipe *string, tags []string, values []RecordValue) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`UPDATE record SET tl=?, dt=?, st=?, r=? WHERE id=?`, title, detail, status, recipe, id)
+	if err != nil {
+		return fmt.Errorf("update record: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("record not found")
+	}
+
+	// Re-insert tags (cascade not available on junction, delete manually)
+	if _, err := tx.Exec(`DELETE FROM record_tags WHERE record_id=?`, id); err != nil {
+		return fmt.Errorf("clear tags: %w", err)
+	}
+	if err := insertTagsExclusive(tx, id, tags); err != nil {
+		return err
+	}
+
+	// Re-insert values
+	if _, err := tx.Exec(`DELETE FROM record_values WHERE id=?`, id); err != nil {
+		return fmt.Errorf("clear values: %w", err)
+	}
+	for _, v := range values {
+		if _, err := tx.Exec(`INSERT INTO record_values (id, k, v) VALUES (?, ?, ?)`, id, v.Key, v.Value); err != nil {
+			return fmt.Errorf("insert value %s: %w", v.Key, err)
+		}
+	}
+
+	// Log status change
+	if _, err := tx.Exec(`INSERT INTO record_log (id, sst) VALUES (?, ?)`, id, status); err != nil {
+		return fmt.Errorf("insert log: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 func UpdateRecordStatus(db *sql.DB, id []byte, status int, info string) error {
@@ -245,9 +293,12 @@ func hydrateRecord(d *sql.DB, r *RecordFull) (*RecordFull, error) {
 			return nil, err
 		}
 		r.Tags = append(r.Tags, t)
+		ti := RecordTag{Tag: t}
 		if sp.Valid {
 			r.ScopePaths = append(r.ScopePaths, sp.String)
+			ti.ScopePath = &sp.String
 		}
+		r.TagInfo = append(r.TagInfo, ti)
 	}
 
 	vrows, err := d.Query(`SELECT k, v FROM record_values WHERE id=?`, r.ID)

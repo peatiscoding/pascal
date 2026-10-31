@@ -135,6 +135,17 @@ func (s *Server) extractFields(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Build scope→tags map for recipe-relevant scopes
+	scopeTags := make(map[string][]string) // scope name → tag names
+	var unscopedTags []string
+	for _, t := range tags {
+		if t.ScopeName != nil {
+			scopeTags[*t.ScopeName] = append(scopeTags[*t.ScopeName], t.Name)
+		} else {
+			unscopedTags = append(unscopedTags, t.Name)
+		}
+	}
+
 	if len(recipe.Scopes) > 0 {
 		ctx.WriteString("\nRequired tag scopes (must pick a tag from each):\n")
 		for _, sc := range recipe.Scopes {
@@ -143,17 +154,27 @@ func (s *Server) extractFields(w http.ResponseWriter, r *http.Request) {
 				req = " (REQUIRED)"
 			}
 			fmt.Fprintf(&ctx, "- %s%s\n", sc.ScopeName, req)
+			if choices, ok := scopeTags[sc.ScopeName]; ok {
+				fmt.Fprintf(&ctx, "  Valid tags: %s\n", strings.Join(choices, ", "))
+			}
 		}
 	}
 
 	if len(tags) > 0 {
-		ctx.WriteString("\nAvailable tags: ")
-		names := make([]string, len(tags))
-		for i, t := range tags {
-			names[i] = t.Name
+		ctx.WriteString("\nAll available tags")
+		if len(scopeTags) > 0 {
+			ctx.WriteString(" (by scope):\n")
+			for scope, names := range scopeTags {
+				fmt.Fprintf(&ctx, "  [%s]: %s\n", scope, strings.Join(names, ", "))
+			}
+			if len(unscopedTags) > 0 {
+				fmt.Fprintf(&ctx, "  [unscoped]: %s\n", strings.Join(unscopedTags, ", "))
+			}
+		} else {
+			ctx.WriteString(": ")
+			ctx.WriteString(strings.Join(unscopedTags, ", "))
+			ctx.WriteString("\n")
 		}
-		ctx.WriteString(strings.Join(names, ", "))
-		ctx.WriteString("\n")
 	}
 
 	statusHint := fmt.Sprintf("Use %d (recipe default) unless text clearly indicates otherwise.", recipe.DefaultStatus)
@@ -162,8 +183,8 @@ func (s *Server) extractFields(w http.ResponseWriter, r *http.Request) {
 
 %s
 Return JSON with these fields:
-- tl (string): title/summary
-- dt (string, optional): detail
+- tl (string): a concise summary of the text. Remove any information already captured by tags or values (e.g. if a tag covers the category/type, don't repeat it in the title). Keep only what tags and values cannot represent.
+- dt (string, optional): additional detail only if the text contains context not captured by title, tags, or values. Omit if redundant.
 - st (int): status 0=paused, 1=todo, 2=doing, 3=done. %s
 - tags (string[]): pick from available tags only. Include tags from required scopes.
 - values (object[]): each with "k" (master value key) and "v" (number). Extract numeric values from the text.
@@ -190,7 +211,9 @@ User text: %s`, ctx.String(), statusHint, req.Text)
 // --- Internal helpers for fetching master data ---
 
 type tagData struct {
-	Name string
+	Name      string
+	ScopeID   *int
+	ScopeName *string
 }
 
 type scopeData struct {
@@ -205,7 +228,7 @@ type masterValueData struct {
 }
 
 func (s *Server) listTagsData() ([]tagData, error) {
-	rows, err := s.mainDB.Query(`SELECT t FROM tag ORDER BY t`)
+	rows, err := s.mainDB.Query(`SELECT t.t, t.s, sc.name FROM tag t LEFT JOIN scope sc ON t.s = sc.id ORDER BY t.t`)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +236,7 @@ func (s *Server) listTagsData() ([]tagData, error) {
 	var tags []tagData
 	for rows.Next() {
 		var t tagData
-		if err := rows.Scan(&t.Name); err != nil {
+		if err := rows.Scan(&t.Name, &t.ScopeID, &t.ScopeName); err != nil {
 			return nil, err
 		}
 		tags = append(tags, t)
