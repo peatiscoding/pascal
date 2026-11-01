@@ -57,12 +57,13 @@ type matchResult struct {
 }
 
 type extractResult struct {
-	Title   string           `json:"tl"`
-	Detail  *string          `json:"dt,omitempty"`
-	Status  int              `json:"st"`
-	Tags    []string         `json:"tags"`
-	Values  []db.RecordValue `json:"values"`
-	Missing []string         `json:"missing,omitempty"`
+	Title    string           `json:"tl"`
+	Detail   *string          `json:"dt,omitempty"`
+	Status   int              `json:"st"`
+	Tags     []string         `json:"tags"`
+	Values   []db.RecordValue `json:"values"`
+	Missing  []string         `json:"missing,omitempty"`
+	RecordID string           `json:"record_id,omitempty"`
 }
 
 // needsInputResult wraps partial extraction for the draft UI.
@@ -319,7 +320,8 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 		return
 	}
 
-	// Store result for draft UI display
+	// Store result for draft UI display — include record ID for editing
+	result.RecordID = fmt.Sprintf("%x", record.ID)
 	resultJSON, _ := json.Marshal(result)
 	if err := db.SetQueueResult(w.queueDB, item.ID, "done", string(resultJSON)); err != nil {
 		log.Printf("set done error for item %d: %v", item.ID, err)

@@ -7,6 +7,18 @@ const STATUS_LABELS = ['Paused', 'Todo', 'Doing', 'Done'];
 function statusLabel(st) { return `<span class="badge badge-st-${st}">${STATUS_LABELS[st] || st}</span>`; }
 function b64ToHex(b64) { return [...atob(b64)].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(''); }
 
+// --- Mobile nav ---
+{
+    const menuBtn = document.getElementById('nav-menu-btn');
+    const mobileNav = document.getElementById('mobile-nav');
+    if (menuBtn && mobileNav) {
+        menuBtn.onclick = () => mobileNav.classList.toggle('open');
+        mobileNav.querySelectorAll('a').forEach(a => {
+            a.addEventListener('click', () => mobileNav.classList.remove('open'));
+        });
+    }
+}
+
 // --- Router ---
 
 function route() {
@@ -61,7 +73,7 @@ async function healthCheck(url) {
 
 async function renderDashboard() {
     app.innerHTML = `
-        <h2 style="margin-bottom:1rem">Dashboard</h2>
+        <h2 style="margin-bottom:var(--s-5)">Dashboard</h2>
         <div class="health-grid">
             <div class="health-card" id="h-server"><h3>API Server</h3><span class="health-status loading">checking...</span></div>
             <div class="health-card" id="h-bot"><h3>Discord Bot</h3><span class="health-status loading">checking...</span></div>
@@ -122,14 +134,21 @@ function statusIcon(st) {
     return `<span class="st-icon ${STATUS_ICON_CLASS[st]}" title="${STATUS_LABELS[st]}">${STATUS_ICONS[st]}</span>`;
 }
 
-function recordLine(r) {
+function recordLine(r, primaryScopeName) {
     const tagInfo = (r.tag_info || []);
     const tagTooltip = tagInfo.length ? esc(tagInfo.map(ti => ti.sp ? ti.sp.replaceAll('|', '.') + ': ' + ti.t : ti.t).join('\n')) : '';
     const values = (r.values || []);
     const date = r.ct ? r.ct.slice(0, 10) : '';
 
+    // If primary scope set, show tag from that scope; otherwise show recipe name
+    let firstCol = r.r ? '/' + esc(r.r) : '';
+    if (primaryScopeName) {
+        const psTag = tagInfo.find(ti => ti.sp && ti.sp.split('|').includes(primaryScopeName));
+        firstCol = psTag ? esc(psTag.t) : '<span style="color:var(--ink-4)">—</span>';
+    }
+
     return `<div class="rec-line" data-record='${esc(JSON.stringify(r))}'>
-        <span class="rec-recipe">${r.r ? '/' + esc(r.r) : ''}</span>
+        <span class="rec-recipe">${firstCol}</span>
         <span class="rec-st" data-st="${r.st}">${statusIcon(r.st)}</span>
         <span class="rec-title">${esc(r.tl)}</span>
         ${tagInfo.length ? `<span class="rec-tags" title="${tagTooltip}"><span class="rec-tag-dots">${tagInfo.map(ti => `<span class="rec-dot${ti.sp ? ' rec-dot-scoped' : ''}"></span>`).join('')}</span></span>` : ''}
@@ -204,12 +223,16 @@ window.carouselNav = function(dir) {
 async function renderRecords() {
     app.innerHTML = '<h2 style="margin-bottom:var(--s-5)">Records</h2><div id="records-list">Loading...</div>';
     try {
-        const records = await api('/api/records');
+        const [records, recipes] = await Promise.all([api('/api/records'), api('/api/recipes').catch(() => [])]);
         const el = document.getElementById('records-list');
         if (!records || records.length === 0) {
             el.innerHTML = '<p class="empty">No records yet.</p>';
             return;
         }
+
+        // Build primary scope lookup: recipe usecase → scope name
+        const primaryScope = {};
+        (recipes || []).forEach(r => { if (r.ps_name) primaryScope[r.u] = r.ps_name; });
 
         // Group by recipe
         const groups = {};
@@ -228,12 +251,13 @@ async function renderRecords() {
         // Build grouped list
         let html = carousel;
         for (const [recipe, recs] of Object.entries(groups)) {
+            const ps = primaryScope[recipe];
             html += `<div class="rec-group">
                 <div class="rec-group-header">
                     <span class="rec-recipe">/${esc(recipe)}</span>
                     <span class="rec-group-count num">${recs.length}</span>
                 </div>
-                ${recs.map(r => recordLine(r)).join('')}
+                ${recs.map(r => recordLine(r, ps)).join('')}
             </div>`;
         }
         if (noRecipe.length) {
@@ -280,7 +304,7 @@ function showRecordDetail(r) {
     overlay.innerHTML = `
         <div class="record-detail-box">
             <div class="record-detail-meta" style="margin-bottom:var(--s-5)">
-                <span style="color:var(--ink-3);font-size:0.8125rem">${esc(r.ct)}</span>
+                <span style="color:var(--ink-3);font-size:var(--fs-0)">${esc(r.ct)}</span>
                 ${r.r ? `<span class="badge" style="background:var(--mod-act-lt);color:var(--mod-act-dk)">/${esc(r.r)}</span>` : ''}
             </div>
             <div class="form-group">
@@ -306,7 +330,7 @@ function showRecordDetail(r) {
                 <div id="rd-values"></div>
                 <button type="button" class="add-row" id="rd-add-value">+ Add value</button>
             </div>
-            <div style="margin-top:1rem;display:flex;justify-content:space-between">
+            <div style="margin-top:var(--s-5);display:flex;justify-content:space-between">
                 <button class="btn btn-danger btn-sm" id="record-detail-delete">Delete</button>
                 <div style="display:flex;gap:var(--s-4)">
                     <button class="btn btn-secondary btn-sm" onclick="closeRecordDetail()">Cancel</button>
@@ -440,14 +464,15 @@ async function renderRecipes() {
         }
         el.innerHTML = `
             <table>
-                <thead><tr><th>Usecase</th><th>Description</th><th>Example</th><th>Default Status</th><th>Scopes</th><th>Values</th></tr></thead>
+                <thead><tr><th>Usecase</th><th>Description</th><th>Example</th><th>Default Status</th><th>Primary Scope</th><th>Scopes</th><th>Values</th></tr></thead>
                 <tbody>
                     ${recipes.map(r => `
                         <tr class="clickable" onclick="location.hash='#recipes/edit/${encodeURIComponent(r.u)}'">
                             <td><strong>${esc(r.u)}</strong></td>
                             <td>${esc(r.d)}</td>
-                            <td style="color:var(--ink-3);font-size:0.8125rem">${esc(r.ex || '')}</td>
+                            <td style="color:var(--ink-3);font-size:var(--fs-0)">${esc(r.ex || '')}</td>
                             <td>${statusLabel(r.default_st)}</td>
+                            <td style="color:var(--ink-3)">${r.ps_name ? esc(r.ps_name) : '—'}</td>
                             <td><span class="badge">${(r.scopes || []).length}</span></td>
                             <td><span class="badge">${(r.values || []).length}</span></td>
                         </tr>
@@ -524,6 +549,15 @@ async function renderRecipeForm(usecase) {
             </div>
 
             <div class="form-group">
+                <label>Primary Scope</label>
+                <select id="rf-ps">
+                    <option value="">— none —</option>
+                    ${(_scopeOptions || []).map(s => `<option value="${s.id}" ${s.id === recipe.ps ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+                </select>
+                <small style="color:var(--ink-4)">Shown in first column of record listing instead of recipe name</small>
+            </div>
+
+            <div class="form-group">
                 <label>Scopes</label>
                 <div class="dynamic-list" id="rf-scopes"></div>
                 <button type="button" class="add-row" onclick="addScopeRow()">+ Add Scope</button>
@@ -581,6 +615,8 @@ async function saveRecipe(isEdit) {
     const d = document.getElementById('rf-d').value.trim();
     const ex = document.getElementById('rf-ex').value.trim();
     const default_st = parseInt(document.getElementById('rf-dst').value);
+    const psVal = document.getElementById('rf-ps').value;
+    const ps = psVal ? parseInt(psVal) : null;
     if (!u || !d) return alert('Usecase and description required.');
 
     const values = [...document.querySelectorAll('#rf-values .dynamic-row')].map(row => ({
@@ -593,7 +629,7 @@ async function saveRecipe(isEdit) {
         required: row.querySelector('.rs-req').checked,
     })).filter(s => s.scope_id);
 
-    const body = JSON.stringify({ u, d, ex, default_st, values, scopes });
+    const body = JSON.stringify({ u, d, ex, default_st, ps, values, scopes });
 
     try {
         if (isEdit) {
@@ -622,8 +658,8 @@ async function deleteRecipe(u) {
 async function renderMaster(tab) {
     tab = tab || 'scopes';
     app.innerHTML = `
-        <h2 style="margin-bottom:0.5rem">Master Data</h2>
-        <p style="color:var(--ink-4);font-size:0.85rem;margin-bottom:1rem">Reference tables used by recipes and records. <strong>Scopes</strong> for hierarchy and tag grouping, <strong>Tags</strong> for filtering (scoped tags are exclusive per record), <strong>Values</strong> for aggregation.</p>
+        <h2 style="margin-bottom:var(--s-4)">Master Data</h2>
+        <p style="color:var(--ink-4);font-size:var(--fs-0);margin-bottom:var(--s-5)">Reference tables used by recipes and records. <strong>Scopes</strong> for hierarchy and tag grouping, <strong>Tags</strong> for filtering (scoped tags are exclusive per record), <strong>Values</strong> for aggregation.</p>
         <div class="master-tabs">
             <a href="#master/scopes" class="tab-btn ${tab === 'scopes' ? 'active' : ''}">Scopes</a>
             <a href="#master/tags" class="tab-btn ${tab === 'tags' ? 'active' : ''}">Tags</a>
@@ -645,7 +681,7 @@ async function renderMasterValues() {
         const values = await api('/api/master-values');
         el.innerHTML = `
             <p class="tab-desc">Values define numeric types attached to records (e.g. THB, calories, tokens). Used for <strong>aggregation</strong> — summing, averaging, and charting over time.</p>
-            <div class="toolbar" style="margin-top:1rem">
+            <div class="toolbar" style="margin-top:var(--s-5)">
                 <span>${(values || []).length} value type(s)</span>
                 <button class="btn btn-primary btn-sm" onclick="showMasterValueForm()">+ Add</button>
             </div>
@@ -726,7 +762,7 @@ async function renderMasterTags() {
         _scopesCache = scopes || [];
         el.innerHTML = `
             <p class="tab-desc">Tags label records for <strong>filtering</strong>. A tag can optionally belong to a <strong>scope</strong> — tags sharing the same scope are <strong>exclusive</strong> (one per record per scope). Tags without a scope attach freely.</p>
-            <div class="toolbar" style="margin-top:1rem">
+            <div class="toolbar" style="margin-top:var(--s-5)">
                 <span>${_tagsCache.length} tag(s)</span>
                 <button class="btn btn-primary btn-sm" onclick="showTagForm()">+ Add</button>
             </div>
@@ -808,7 +844,7 @@ async function renderMasterScopes() {
         _scopesData = await api('/api/scopes') || [];
         el.innerHTML = `
             <p class="tab-desc">Scopes define the organizational hierarchy and serve as tag grouping. Each record has exactly <strong>one</strong> scope. Tags linked to a scope are exclusive — one per scope per record. (e.g. Work|ProjectX, Personal|Health).</p>
-            <div class="toolbar" style="margin-top:1rem">
+            <div class="toolbar" style="margin-top:var(--s-5)">
                 <span>${_scopesData.length} scope(s)</span>
                 <button class="btn btn-primary btn-sm" onclick="showScopeForm(null, null)">+ Add Root</button>
             </div>
@@ -941,7 +977,7 @@ function openSpotlight() {
             return;
         }
         recipesHint.innerHTML = slashMatches.map((r, i) =>
-            `<span class="badge badge-st-${r.default_st}" style="margin:0.125rem;cursor:pointer;${i === slashIdx ? 'outline:var(--focus);outline-offset:1px' : ''}" data-ri="${i}">${r.u}</span>`
+            `<span class="badge badge-st-${r.default_st}" style="margin:var(--s-1);cursor:pointer;${i === slashIdx ? 'outline:var(--focus);outline-offset:1px' : ''}" data-ri="${i}">${r.u}</span>`
         ).join(' ');
         recipesHint.querySelectorAll('[data-ri]').forEach(el => {
             el.onclick = () => confirmRecipeChoice(slashMatches[parseInt(el.dataset.ri)].u);
@@ -1060,7 +1096,7 @@ function renderDraft(queueId) {
     if (draftPollTimer) { clearInterval(draftPollTimer); draftPollTimer = null; }
 
     app.innerHTML = `
-        <h2 style="margin-bottom:1rem">Draft #${queueId}</h2>
+        <h2 style="margin-bottom:var(--s-5)">Draft #${queueId}</h2>
         <div id="draft-content"><p style="color:var(--ink-4)">Loading...</p></div>
     `;
 
@@ -1096,7 +1132,7 @@ function renderDraftContent(item, queueId) {
         el.innerHTML = `
             <div class="draft-status">
                 <p>Processing... <span class="badge">${item.status}</span></p>
-                <p style="color:var(--ink-4);font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
+                <p style="color:var(--ink-4);font-size:var(--fs-0);margin-top:var(--s-4)">Input: ${escHtml(item.payload)}</p>
             </div>
         `;
         return;
@@ -1107,8 +1143,8 @@ function renderDraftContent(item, queueId) {
         el.innerHTML = `
             <div class="draft-status">
                 <p style="color:var(--neg)">Failed: ${escHtml(item.error || 'Unknown error')}</p>
-                <p style="color:var(--ink-4);font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
-                <div style="margin-top:1rem"><button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button> <button class="btn btn-primary" onclick="openSpotlight()">Try again</button></div>
+                <p style="color:var(--ink-4);font-size:var(--fs-0);margin-top:var(--s-4)">Input: ${escHtml(item.payload)}</p>
+                <div style="margin-top:var(--s-5)"><button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button> <button class="btn btn-primary" onclick="openSpotlight()">Try again</button></div>
             </div>
         `;
         return;
@@ -1121,7 +1157,7 @@ function renderDraftContent(item, queueId) {
         el.innerHTML = `
             <div class="draft-status">
                 <p style="color:var(--pos);font-weight:600;margin-bottom:var(--s-5)">Ready to save</p>
-                <p style="color:var(--ink-4);font-size:0.85rem;margin-bottom:var(--s-5)">Input: ${escHtml(item.payload)}</p>
+                <p style="color:var(--ink-4);font-size:var(--fs-0);margin-bottom:var(--s-5)">Input: ${escHtml(item.payload)}</p>
                 <div class="form-group">
                     <label>Title</label>
                     <input id="draft-done-tl" value="${escHtml(result.tl || '')}">
@@ -1213,19 +1249,29 @@ function renderDraftContent(item, queueId) {
             if (!tl) { alert('Title required'); return; }
 
             try {
-                const body = { tl, st, tags, values, r: item.recipe_u };
+                const body = { full: true, tl, st, tags, values, r: item.recipe_u };
                 if (dt) body.dt = dt;
-                await api('/api/records', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
+                if (result.record_id) {
+                    // Record already created by worker — update it
+                    await api('/api/records/' + result.record_id, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                } else {
+                    // Fallback: create new (shouldn't happen for done status)
+                    await api('/api/records', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                }
                 el.innerHTML = `
                     <div class="draft-status">
                         <p style="color:var(--pos);font-weight:600">Record saved!</p>
-                        <div style="margin-top:1rem">
+                        <div style="margin-top:var(--s-5)">
                             <a href="#records" class="btn btn-secondary">View Records</a>
-                            <button class="btn btn-primary" style="margin-left:0.5rem" onclick="openSpotlight()">Log Another</button>
+                            <button class="btn btn-primary" style="margin-left:var(--s-4)" onclick="openSpotlight()">Log Another</button>
                         </div>
                     </div>
                 `;
@@ -1244,11 +1290,11 @@ function renderDraftContent(item, queueId) {
         el.innerHTML = `
             <div class="draft-status">
                 <p>Multiple recipes match. Pick one:</p>
-                <div id="draft-choices" style="margin-top:0.5rem">
-                    ${matches.map((r, i) => `<button class="btn btn-secondary" style="margin:0.25rem" data-recipe="${escHtml(r)}">${escHtml(r)}</button>`).join('')}
+                <div id="draft-choices" style="margin-top:var(--s-4)">
+                    ${matches.map((r, i) => `<button class="btn btn-secondary" style="margin:var(--s-2)" data-recipe="${escHtml(r)}">${escHtml(r)}</button>`).join('')}
                 </div>
-                <p style="color:var(--ink-4);font-size:0.85rem;margin-top:0.5rem">Input: ${escHtml(item.payload)}</p>
-                <div style="margin-top:0.5rem"><button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button></div>
+                <p style="color:var(--ink-4);font-size:var(--fs-0);margin-top:var(--s-4)">Input: ${escHtml(item.payload)}</p>
+                <div style="margin-top:var(--s-4)"><button class="btn btn-danger" onclick="dismissDraft(${item.id})">Dismiss</button></div>
             </div>
         `;
         document.querySelectorAll('#draft-choices button').forEach(btn => {
@@ -1275,8 +1321,8 @@ function renderDraftContent(item, queueId) {
         el.innerHTML = `
             <div class="draft-status">
                 <p>Almost there! Fill in the missing fields:</p>
-                <p style="color:var(--ink-4);font-size:0.85rem;margin-top:0.25rem">Input: ${escHtml(item.payload)}</p>
-                <div style="margin-top:1rem">
+                <p style="color:var(--ink-4);font-size:var(--fs-0);margin-top:var(--s-3)">Input: ${escHtml(item.payload)}</p>
+                <div style="margin-top:var(--s-5)">
                     <div class="form-group">
                         <label>Title</label>
                         <input id="draft-tl" value="${escHtml(partial.tl || '')}">
@@ -1290,7 +1336,7 @@ function renderDraftContent(item, queueId) {
                         <div id="draft-values"></div>
                         <button type="button" class="add-row" id="draft-add-value">+ Add value</button>
                     </div>
-                    ${missing.length ? `<p style="color:var(--warn);font-size:0.85rem;margin-bottom:0.5rem">Missing: ${missing.join(', ')}</p>` : ''}
+                    ${missing.length ? `<p style="color:var(--warn);font-size:var(--fs-0);margin-bottom:var(--s-4)">Missing: ${missing.join(', ')}</p>` : ''}
                     <div class="form-group">
                         <label>Additional info</label>
                         <textarea id="draft-extra" rows="2" placeholder="Provide missing details..."></textarea>
@@ -1385,9 +1431,9 @@ function renderDraftContent(item, queueId) {
                 el.innerHTML = `
                     <div class="draft-status">
                         <p style="color:var(--pos);font-weight:600">Record saved!</p>
-                        <div style="margin-top:1rem">
+                        <div style="margin-top:var(--s-5)">
                             <a href="#records" class="btn btn-secondary">View Records</a>
-                            <button class="btn btn-primary" style="margin-left:0.5rem" onclick="openSpotlight()">Log Another</button>
+                            <button class="btn btn-primary" style="margin-left:var(--s-4)" onclick="openSpotlight()">Log Another</button>
                         </div>
                     </div>
                 `;
@@ -1546,9 +1592,9 @@ function renderLogs() {
     if (logSource) { logSource.close(); logSource = null; }
 
     app.innerHTML = `
-        <h2 style="margin-bottom:1rem">Bot Logs</h2>
-        <p style="color:var(--ink-4);font-size:0.85rem;margin-bottom:1rem">Live Discord message stream.</p>
-        <div style="margin-bottom:0.5rem;display:flex;align-items:center;gap:1rem">
+        <h2 style="margin-bottom:var(--s-5)">Bot Logs</h2>
+        <p style="color:var(--ink-4);font-size:var(--fs-0);margin-bottom:var(--s-5)">Live Discord message stream.</p>
+        <div style="margin-bottom:var(--s-4);display:flex;align-items:center;gap:var(--s-5)">
             <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
             <button id="log-clear" class="btn btn-sm">Clear</button>
         </div>

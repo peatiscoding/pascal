@@ -30,7 +30,7 @@ dev: build
 	go run ./cmd/web 2>&1 | tee runtime/logs/web.log & \
 	wait
 
-dev-detached: build
+dev-detached: dev-kill build
 	@mkdir -p runtime/logs
 	@go run ./cmd/server >> runtime/logs/server.log 2>&1 &
 	@go run ./cmd/bot >> runtime/logs/bot.log 2>&1 &
@@ -45,7 +45,12 @@ dev-kill:
 	@pkill -f "go-build.*exe/server$$" 2>/dev/null && echo "Killed server (child)" || true
 	@pkill -f "go-build.*exe/web$$" 2>/dev/null && echo "Killed web (child)" || true
 	@rm -f runtime/server.pid runtime/bot.pid runtime/web.pid
-	@sleep 0.5
+	@for port in 7600 7601 7602; do \
+		for i in 1 2 3 4 5 6 7 8 9 10; do \
+			lsof -iTCP:$$port -sTCP:LISTEN -P 2>/dev/null | grep -q LISTEN || break; \
+			sleep 0.3; \
+		done; \
+	done
 
 run: build
 	./runtime/pascal-server &

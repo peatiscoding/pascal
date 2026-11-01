@@ -18,7 +18,40 @@ a { color: var(--signal); } a:hover { color: var(--signal-hover); }
 :focus-visible { outline: var(--focus); outline-offset: 1px; }
 
 /* Header */
-cds-header { --cds-background: var(--ink); }
+cds-header {
+    --cds-background: var(--ink);
+    --cds-text-on-color: var(--paper);
+    --cds-header-nav-text-color: var(--paper);
+}
+cds-header-nav-item {
+    --cds-text-secondary: var(--line);
+    --cds-border-subtle-01: transparent;
+}
+cds-header-nav-item:hover { --cds-text-secondary: var(--paper); }
+cds-header-nav-item[active] { --cds-text-secondary: var(--paper); --cds-border-interactive: var(--signal); }
+cds-header-name { --cds-text-primary: var(--paper); }
+
+/* Mobile menu */
+.mobile-menu-btn {
+    display: none; background: none; border: none; color: var(--paper);
+    font-size: var(--fs-3); cursor: pointer; padding: 0 var(--s-4);
+    height: 48px; align-items: center; justify-content: center;
+}
+.mobile-nav {
+    display: none; position: fixed; top: 48px; left: 0; right: 0; z-index: 8000;
+    background: var(--card); border-bottom: 1px solid var(--ink);
+    flex-direction: column; padding: var(--s-3) 0;
+    animation: spotlight-fade 0.12s ease-out;
+}
+.mobile-nav.open { display: flex; }
+.mobile-nav-link {
+    padding: var(--s-5) var(--s-6); color: var(--ink); text-decoration: none;
+    font-size: var(--fs-1); border-bottom: 1px solid var(--grid);
+}
+.mobile-nav-link:hover { background: var(--paper); color: var(--signal); }
+@media (max-width: 671px) {
+    .mobile-menu-btn { display: flex; }
+}
 .status-dots { display: flex; gap: var(--s-3); align-items: center; padding: 0 var(--s-5); }
 .status-dot {
     width: 8px; height: 8px; border-radius: 50%;
@@ -85,7 +118,7 @@ tr.clickable { cursor: pointer; }
 .btn-secondary:hover { background: var(--paper); color: var(--ink); }
 .btn-ghost { background: transparent; color: var(--signal); }
 .btn-ghost:hover { background: var(--mod-stat-lt); }
-.btn-sm { min-height: 34px; padding: 0 var(--s-5); font-size: 13px; }
+.btn-sm { min-height: 34px; padding: 0 var(--s-5); font-size: var(--fs-0); }
 
 /* Toolbar */
 .toolbar { display: flex; flex-wrap: wrap; gap: var(--s-5); justify-content: space-between; align-items: center; margin-bottom: var(--s-6); padding-bottom: var(--s-5); border-bottom: 1px solid var(--ink); }
@@ -110,14 +143,14 @@ tr.clickable { cursor: pointer; }
 .dynamic-list { display: flex; flex-direction: column; gap: var(--s-4); }
 .dynamic-row { display: flex; gap: var(--s-4); align-items: center; }
 .dynamic-row select { flex: 1; }
-.dynamic-row label { font-family: var(--font-sans); font-size: 13px; white-space: nowrap; display: flex; align-items: center; gap: var(--s-3); text-transform: none; letter-spacing: 0; margin: 0; }
+.dynamic-row label { font-family: var(--font-sans); font-size: var(--fs-0); white-space: nowrap; display: flex; align-items: center; gap: var(--s-3); text-transform: none; letter-spacing: 0; margin: 0; }
 .dynamic-row .btn-remove, .value-row .btn-remove {
     background: none; border: none; color: var(--neg); cursor: pointer;
     font-size: var(--fs-2); width: 34px; height: 34px; border-radius: var(--r-2);
 }
 .dynamic-row .btn-remove:hover, .value-row .btn-remove:hover { background: var(--neg-lt); }
 .add-row {
-    font-size: 14px; color: var(--signal); cursor: pointer; background: none;
+    font-size: var(--fs-1); color: var(--signal); cursor: pointer; background: none;
     border: 1px dashed var(--line-2); border-radius: var(--r-2); min-height: 44px; padding: var(--s-4); text-align: center;
     font-family: var(--font-mono);
 }
@@ -236,7 +269,7 @@ tr.clickable { cursor: pointer; }
 }
 .inline-form input, .inline-form select {
     min-height: 34px; padding: var(--s-3) var(--s-4); border: 1px solid var(--line-2); border-radius: var(--r-2);
-    font-size: 14px; flex: 1; min-width: 120px; background: var(--card); font-family: inherit;
+    font-size: var(--fs-1); flex: 1; min-width: 120px; background: var(--card); font-family: inherit;
 }
 .inline-form input:focus, .inline-form select:focus { outline: var(--focus); outline-offset: 1px; }
 
@@ -245,7 +278,7 @@ tr.clickable { cursor: pointer; }
 .tree-row { display: flex; align-items: center; gap: var(--s-4); padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--grid); transition: background 0.1s; }
 .tree-row:hover { background: var(--paper); }
 .tree-toggle { font-family: var(--font-mono); font-size: var(--fs-0); color: var(--ink-4); width: 1rem; text-align: center; flex-shrink: 0; }
-.tree-icon { font-size: 14px; flex-shrink: 0; }
+.tree-icon { font-size: var(--fs-1); flex-shrink: 0; }
 .tree-label { font-weight: 600; }
 .tree-path { flex: 1; }
 .tree-path-text { font-size: var(--fs-0); color: var(--ink-4); font-family: var(--font-mono); }
@@ -259,7 +292,7 @@ tr.clickable { cursor: pointer; }
 .log-container {
     background: var(--ink); color: var(--paper);
     font-family: var(--font-mono); font-variant-numeric: tabular-nums;
-    font-size: 13px; line-height: 1.55;
+    font-size: var(--fs-0); line-height: 1.55;
     padding: var(--s-5) var(--s-6); height: 500px; overflow-y: auto;
     border-radius: var(--r-2);
     white-space: pre-wrap; word-break: break-all;
@@ -324,7 +357,7 @@ tr.clickable { cursor: pointer; }
 }
 .tag-chip.is-new { background: var(--warn-lt); outline: 1px dashed var(--warn); }
 .tag-chip .tag-scope { color: var(--ink-4); font-size: 11px; }
-.tag-chip .tag-remove { cursor: pointer; color: var(--ink-4); font-size: 14px; line-height: 1; margin-left: var(--s-1); }
+.tag-chip .tag-remove { cursor: pointer; color: var(--ink-4); font-size: var(--fs-1); line-height: 1; margin-left: var(--s-1); }
 .tag-chip .tag-remove:hover { color: var(--neg); }
 .tag-dropdown {
     position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 10;
@@ -332,7 +365,7 @@ tr.clickable { cursor: pointer; }
     max-height: 180px; overflow-y: auto;
 }
 .tag-dropdown-item {
-    padding: var(--s-4) var(--s-5); cursor: pointer; font-size: 14px;
+    padding: var(--s-4) var(--s-5); cursor: pointer; font-size: var(--fs-1);
     display: flex; justify-content: space-between; align-items: center;
 }
 .tag-dropdown-item:hover, .tag-dropdown-item.active { background: var(--mod-stat-lt); }

@@ -41,6 +41,7 @@
 </head>
 <body>
     <cds-header aria-label="PASCAL">
+        <button class="mobile-menu-btn" id="nav-menu-btn" aria-label="Menu">☰</button>
         <cds-header-name prefix="">PASCAL</cds-header-name>
         <div class="status-dots" title="Server status">
             <span class="status-dot" id="dot-server" title="API Server"></span>
@@ -57,6 +58,13 @@
         </cds-header-nav>
         <button class="spotlight-trigger" onclick="openSpotlight()" title="Quick log (\u2318K)" aria-label="Quick log">ƒ</button>
     </cds-header>
+    <nav class="mobile-nav" id="mobile-nav">
+        <a href="#dashboard" class="mobile-nav-link">Dashboard</a>
+        <a href="#records" class="mobile-nav-link">Records</a>
+        <a href="#recipes" class="mobile-nav-link">Recipes</a>
+        <a href="#master" class="mobile-nav-link">Master Data</a>
+        <a href="#logs" class="mobile-nav-link">Logs</a>
+    </nav>
     <main id="app"></main>
     <script src="app.js"></script>
 </body>

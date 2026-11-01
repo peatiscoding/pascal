@@ -59,8 +59,28 @@ Network: VPS with public endpoints (webhooks, gcal push) + Tailscale for everyth
 
 ## Design System (web UI)
 
-- Tokens live in `cmd/web/static/tokens.css` (loaded before `style.css`). Use `var(--…)` — never hard-coded hex in CSS or `app.js` inline styles.
+**MANDATORY: All styling MUST use design tokens from `tokens.css`. Never use hard-coded values.**
+
+### Token usage rules
+
+- **Colors:** Always `var(--ink)`, `var(--paper)`, `var(--mod-stat)`, etc. — never hex like `#111318` or `rgba(...)` in CSS or inline styles.
+- **Font sizes:** Always `var(--fs-0)` through `var(--fs-8)` — never `13px`, `14px`, `0.85rem`, etc.
+- **Spacing/padding/margin/gap:** Always `var(--s-1)` through `var(--s-9)` (Fibonacci: 2,3,5,8,13,21,34,55,89px) — never raw `px` or `rem`.
+- **Border radius:** Always `var(--r-0)` through `var(--r-3)` — never raw `px`.
+- **Borders:** Use `var(--rule)` for standard borders, `var(--grid)` / `var(--line)` / `var(--line-2)` / `var(--ink)` for border colors.
+- **Font families:** `var(--font-sans)`, `var(--font-mono)`, `var(--font-math)` — never raw font names.
+- **Focus/outline:** Use `var(--focus)` — never custom outline styles.
+
+### Tokens reference
+
+- Tokens live in `cmd/web/static/tokens.css` (loaded before `style.css`).
 - Type: `--fs-0…8` = 12·1.25ⁿ. Fonts: Geist (words), Geist Mono + `.num` (all numbers, tabular), STIX Two italic `.math` (symbols).
 - Space/radius: Fibonacci only (`--s-1…9` = 2,3,5,8,13,21,34,55,89; `--r-*`). No shadows, 1px rules.
 - Modules: σ stats `--mod-stat`, ∫ context `--mod-ctx`, Δ actions `--mod-act`, Σ logging `--mod-log` — always pair color with symbol. Sign: `--pos`/`--neg`/`--warn` with + / − / ≈.
 - Carbon web components are themed via `--cds-*` overrides in `tokens.css`.
+
+### Inline styles in `app.js`
+
+Same rules apply. Use `var(--…)` in inline `style=""` attributes. Example:
+- ✅ `style="margin-top:var(--s-5);color:var(--ink-3);font-size:var(--fs-0)"`
+- ❌ `style="margin-top:1rem;color:#4A4E57;font-size:0.85rem"`
