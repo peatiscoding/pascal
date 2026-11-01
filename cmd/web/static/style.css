@@ -327,12 +327,13 @@ tr.clickable { cursor: pointer; }
     background: var(--card); border: 1px solid var(--ink); border-radius: var(--r-2);
     overflow: hidden;
 }
-.spotlight-box input {
+.spotlight-box textarea {
     width: 100%; padding: var(--s-5) var(--s-6); border: none; border-bottom: 2px solid var(--signal);
     font-size: var(--fs-2); font-family: var(--font-mono);
     background: var(--card); color: var(--ink); outline: none;
+    resize: vertical; min-height: 55px;
 }
-.spotlight-box input:disabled { background: var(--paper); color: var(--ink-4); }
+.spotlight-box textarea:disabled { background: var(--paper); color: var(--ink-4); }
 .spotlight-hint {
     padding: var(--s-4) var(--s-6); font-family: var(--font-mono); font-size: var(--fs-0); color: var(--ink-4);
     background: var(--paper);

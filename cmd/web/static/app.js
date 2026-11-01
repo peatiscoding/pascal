@@ -992,7 +992,7 @@ function openSpotlight() {
     overlay.className = 'spotlight-overlay';
     overlay.innerHTML = `
         <div class="spotlight-box">
-            <input id="spotlight-input" type="text" placeholder="Log something... /expense Lunch 200 THB" autocomplete="off">
+            <textarea id="spotlight-input" rows="3" placeholder="Log something... /expense Lunch 200 THB" autocomplete="off"></textarea>
             <div id="spotlight-hint" class="spotlight-hint">\u21B5 to send \u00b7 esc to close</div>
             <div id="spotlight-recipes" class="spotlight-hint" style="display:none"></div>
         </div>
@@ -1081,6 +1081,7 @@ function openSpotlight() {
         }
 
         if (e.key === 'Enter') {
+            e.preventDefault();
             const raw = input.value.trim();
             if (!raw) return;
 
