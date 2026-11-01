@@ -2,12 +2,13 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 )
 
 type RecipeValue struct {
-	MasterKey string `json:"master_key"`
-	Required  bool   `json:"required"`
+	MasterKey  string `json:"master_key"`
+	RequiredAt []int  `json:"required_at"`
 }
 
 type RecipeScope struct {
@@ -67,18 +68,20 @@ func ListRecipesFull(db *sql.DB) ([]RecipeFull, error) {
 }
 
 func hydrateRecipe(d *sql.DB, r *RecipeFull) (*RecipeFull, error) {
-	rows, err := d.Query(`SELECT master_key, required FROM recipe_values WHERE recipe_u=?`, r.Usecase)
+	rows, err := d.Query(`SELECT master_key, required_at FROM recipe_values WHERE recipe_u=?`, r.Usecase)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var v RecipeValue
-		var req int
-		if err := rows.Scan(&v.MasterKey, &req); err != nil {
+		var reqAt string
+		if err := rows.Scan(&v.MasterKey, &reqAt); err != nil {
 			return nil, err
 		}
-		v.Required = req == 1
+		if err := json.Unmarshal([]byte(reqAt), &v.RequiredAt); err != nil {
+			v.RequiredAt = []int{}
+		}
 		r.Values = append(r.Values, v)
 	}
 
@@ -112,12 +115,9 @@ func InsertRecipe(db *sql.DB, r *RecipeFull) error {
 	}
 
 	for _, v := range r.Values {
-		req := 0
-		if v.Required {
-			req = 1
-		}
-		if _, err := tx.Exec(`INSERT INTO recipe_values (recipe_u, master_key, required) VALUES (?, ?, ?)`,
-			r.Usecase, v.MasterKey, req); err != nil {
+		reqAt, _ := json.Marshal(v.RequiredAt)
+		if _, err := tx.Exec(`INSERT INTO recipe_values (recipe_u, master_key, required_at) VALUES (?, ?, ?)`,
+			r.Usecase, v.MasterKey, string(reqAt)); err != nil {
 			return fmt.Errorf("insert recipe_value %s: %w", v.MasterKey, err)
 		}
 	}
@@ -160,12 +160,9 @@ func UpdateRecipe(db *sql.DB, r *RecipeFull) error {
 	}
 
 	for _, v := range r.Values {
-		req := 0
-		if v.Required {
-			req = 1
-		}
-		if _, err := tx.Exec(`INSERT INTO recipe_values (recipe_u, master_key, required) VALUES (?, ?, ?)`,
-			r.Usecase, v.MasterKey, req); err != nil {
+		reqAt, _ := json.Marshal(v.RequiredAt)
+		if _, err := tx.Exec(`INSERT INTO recipe_values (recipe_u, master_key, required_at) VALUES (?, ?, ?)`,
+			r.Usecase, v.MasterKey, string(reqAt)); err != nil {
 			return fmt.Errorf("insert recipe_value %s: %w", v.MasterKey, err)
 		}
 	}

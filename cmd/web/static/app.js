@@ -286,6 +286,11 @@ async function renderRecords() {
 
 async function toggleStatus(r) {
     const next = r.st === 1 ? 3 : r.st === 3 ? 1 : (r.st + 1) % 4;
+    if (r.r) {
+        const recipe = await getRecipe(r.r);
+        const missing = checkRequiredValues(recipe, next, r.values);
+        if (missing.length > 0 && !confirm(`Missing values required for "${STATUS_LABELS[next]}":\n\n${missing.join(', ')}\n\nContinue anyway?`)) return;
+    }
     try {
         await api('/api/records/' + b64ToHex(r.id), {
             method: 'PATCH',
@@ -408,6 +413,11 @@ function showRecordDetail(r) {
         if (!tl) { alert('Title required'); return; }
 
         try {
+            if (r.r) {
+                const recipe = await getRecipe(r.r);
+                const missing = checkRequiredValues(recipe, st, values.map(v => ({ k: v.k })));
+                if (missing.length > 0 && !confirm(`Missing values required for "${STATUS_LABELS[st]}":\n\n${missing.join(', ')}\n\nSave anyway?`)) return;
+            }
             const body = { full: true, tl, st, tags, values };
             if (dt) body.dt = dt;
             if (r.r) body.r = r.r;
@@ -485,6 +495,28 @@ async function renderRecipes() {
     }
 }
 
+// --- Recipe requirement check ---
+
+let _recipeCache = {};
+
+async function getRecipe(usecase) {
+    if (!usecase) return null;
+    if (_recipeCache[usecase]) return _recipeCache[usecase];
+    try {
+        const r = await api('/api/recipes/' + encodeURIComponent(usecase));
+        _recipeCache[usecase] = r;
+        return r;
+    } catch { return null; }
+}
+
+function checkRequiredValues(recipe, targetSt, recordValues) {
+    if (!recipe || !recipe.values) return [];
+    const haveKeys = new Set((recordValues || []).map(v => v.k));
+    return recipe.values
+        .filter(v => (v.required_at || []).includes(targetSt) && !haveKeys.has(v.master_key))
+        .map(v => v.master_key);
+}
+
 // --- Recipe Form ---
 
 let _masterValues = null;
@@ -544,22 +576,20 @@ async function renderRecipeForm(usecase) {
 
             <div class="form-group">
                 <label>Values (master_value bindings)</label>
-                <div class="dynamic-list" id="rf-values"></div>
+                <table id="rf-values">
+                    <thead><tr><th>Key</th>${STATUS_LABELS.map((l, i) => `<th style="text-align:center">${statusIcon(i)}</th>`).join('')}<th></th></tr></thead>
+                    <tbody></tbody>
+                </table>
                 <button type="button" class="add-row" onclick="addValueRow()">+ Add Value</button>
             </div>
 
             <div class="form-group">
-                <label>Primary Scope</label>
-                <select id="rf-ps">
-                    <option value="">— none —</option>
-                    ${(_scopeOptions || []).map(s => `<option value="${s.id}" ${s.id === recipe.ps ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
-                </select>
-                <small style="color:var(--ink-4)">Shown in first column of record listing instead of recipe name</small>
-            </div>
-
-            <div class="form-group">
                 <label>Scopes</label>
-                <div class="dynamic-list" id="rf-scopes"></div>
+                <small style="color:var(--ink-4)">Mark one as primary to show its tag in record listing instead of recipe name</small>
+                <table id="rf-scopes">
+                    <thead><tr><th>Scope</th><th style="text-align:center;color:var(--neg)" title="Required">✱</th><th style="text-align:center" title="Primary">🔑</th><th></th></tr></thead>
+                    <tbody></tbody>
+                </table>
                 <button type="button" class="add-row" onclick="addScopeRow()">+ Add Scope</button>
             </div>
 
@@ -571,8 +601,17 @@ async function renderRecipeForm(usecase) {
     `;
 
     // Populate existing values/scopes
-    (recipe.values || []).forEach(v => addValueRow(v.master_key, v.required));
-    (recipe.scopes || []).forEach(s => addScopeRow(s.scope_id, s.required));
+    (recipe.values || []).forEach(v => addValueRow(v.master_key, v.required_at));
+    (recipe.scopes || []).forEach(s => addScopeRow(s.scope_id, s.required, s.scope_id === recipe.ps));
+
+    // Only one primary scope allowed; clicking unchecks others
+    document.getElementById('rf-scopes').addEventListener('change', (e) => {
+        if (e.target.classList.contains('rs-primary') && e.target.checked) {
+            document.querySelectorAll('#rf-scopes .rs-primary').forEach(cb => {
+                if (cb !== e.target) cb.checked = false;
+            });
+        }
+    });
 
     document.getElementById('recipe-form').onsubmit = async (e) => {
         e.preventDefault();
@@ -580,34 +619,38 @@ async function renderRecipeForm(usecase) {
     };
 }
 
-function addValueRow(key, required) {
-    const container = document.getElementById('rf-values');
-    const row = document.createElement('div');
-    row.className = 'dynamic-row';
+function addValueRow(key, requiredAt) {
+    const ra = Array.isArray(requiredAt) ? requiredAt : [];
+    const tbody = document.querySelector('#rf-values tbody');
+    const row = document.createElement('tr');
     row.innerHTML = `
-        <select class="rv-key">
-            <option value="">-- select --</option>
-            ${(_masterValues || []).map(v => `<option value="${esc(v.k)}" ${v.k === key ? 'selected' : ''}>${esc(v.k)} — ${esc(v.d)}</option>`).join('')}
-        </select>
-        <label><input type="checkbox" class="rv-req" ${required !== false ? 'checked' : ''}> Required</label>
-        <button type="button" class="btn-remove" onclick="this.closest('.dynamic-row').remove()">×</button>
+        <td>
+            <select class="rv-key">
+                <option value="">-- select --</option>
+                ${(_masterValues || []).map(v => `<option value="${esc(v.k)}" ${v.k === key ? 'selected' : ''}>${esc(v.k)} — ${esc(v.d)}</option>`).join('')}
+            </select>
+        </td>
+        ${STATUS_LABELS.map((l, i) => `<td style="text-align:center"><input type="checkbox" class="rv-req-st" data-st="${i}" ${ra.includes(i) ? 'checked' : ''}></td>`).join('')}
+        <td><button type="button" class="btn-remove" onclick="this.closest('tr').remove()">×</button></td>
     `;
-    container.appendChild(row);
+    tbody.appendChild(row);
 }
 
-function addScopeRow(scopeId, required) {
-    const container = document.getElementById('rf-scopes');
-    const row = document.createElement('div');
-    row.className = 'dynamic-row';
+function addScopeRow(scopeId, required, primary) {
+    const tbody = document.querySelector('#rf-scopes tbody');
+    const row = document.createElement('tr');
     row.innerHTML = `
-        <select class="rs-scope">
-            <option value="">-- select --</option>
-            ${(_scopeOptions || []).map(s => `<option value="${s.id}" ${s.id === scopeId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
-        </select>
-        <label><input type="checkbox" class="rs-req" ${required !== false ? 'checked' : ''}> Required</label>
-        <button type="button" class="btn-remove" onclick="this.closest('.dynamic-row').remove()">×</button>
+        <td>
+            <select class="rs-scope">
+                <option value="">-- select --</option>
+                ${(_scopeOptions || []).map(s => `<option value="${s.id}" ${s.id === scopeId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+            </select>
+        </td>
+        <td style="text-align:center"><input type="checkbox" class="rs-req" ${required !== false ? 'checked' : ''}></td>
+        <td style="text-align:center"><input type="checkbox" class="rs-primary" ${primary ? 'checked' : ''}></td>
+        <td><button type="button" class="btn-remove" onclick="this.closest('tr').remove()">×</button></td>
     `;
-    container.appendChild(row);
+    tbody.appendChild(row);
 }
 
 async function saveRecipe(isEdit) {
@@ -615,19 +658,19 @@ async function saveRecipe(isEdit) {
     const d = document.getElementById('rf-d').value.trim();
     const ex = document.getElementById('rf-ex').value.trim();
     const default_st = parseInt(document.getElementById('rf-dst').value);
-    const psVal = document.getElementById('rf-ps').value;
-    const ps = psVal ? parseInt(psVal) : null;
     if (!u || !d) return alert('Usecase and description required.');
 
-    const values = [...document.querySelectorAll('#rf-values .dynamic-row')].map(row => ({
+    const values = [...document.querySelectorAll('#rf-values tbody tr')].map(row => ({
         master_key: row.querySelector('.rv-key').value,
-        required: row.querySelector('.rv-req').checked,
+        required_at: [...row.querySelectorAll('.rv-req-st')].filter(cb => cb.checked).map(cb => parseInt(cb.dataset.st)),
     })).filter(v => v.master_key);
 
-    const scopes = [...document.querySelectorAll('#rf-scopes .dynamic-row')].map(row => ({
-        scope_id: parseInt(row.querySelector('.rs-scope').value),
-        required: row.querySelector('.rs-req').checked,
-    })).filter(s => s.scope_id);
+    let ps = null;
+    const scopes = [...document.querySelectorAll('#rf-scopes tbody tr')].map(row => {
+        const scope_id = parseInt(row.querySelector('.rs-scope').value);
+        if (row.querySelector('.rs-primary').checked && scope_id) ps = scope_id;
+        return { scope_id, required: row.querySelector('.rs-req').checked };
+    }).filter(s => s.scope_id);
 
     const body = JSON.stringify({ u, d, ex, default_st, ps, values, scopes });
 
@@ -637,6 +680,7 @@ async function saveRecipe(isEdit) {
         } else {
             await api('/api/recipes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
         }
+        delete _recipeCache[u];
         location.hash = '#recipes';
     } catch (e) {
         alert('Error: ' + e.message);
@@ -647,6 +691,7 @@ async function deleteRecipe(u) {
     if (!confirm('Delete recipe "' + u + '"? Records referencing it will lose their recipe link.')) return;
     try {
         await api('/api/recipes/' + encodeURIComponent(u), { method: 'DELETE' });
+        delete _recipeCache[u];
         location.hash = '#recipes';
     } catch (e) {
         alert('Error: ' + e.message);
@@ -1671,5 +1716,5 @@ function esc(s) {
     if (s == null) return '';
     const d = document.createElement('div');
     d.textContent = String(s);
-    return d.innerHTML;
+    return d.innerHTML.replaceAll("'", '&#39;');
 }

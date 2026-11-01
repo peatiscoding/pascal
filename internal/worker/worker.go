@@ -175,7 +175,7 @@ func (w *Worker) phaseExtract(item *db.QueueItem, recipeU string) {
 		ctx.WriteString("Expected values:\n")
 		for _, v := range recipe.Values {
 			req := ""
-			if v.Required {
+			if len(v.RequiredAt) > 0 {
 				req = " (REQUIRED)"
 			}
 			// Find description from master values
@@ -254,9 +254,14 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 	hasMissing := len(result.Missing) > 0
 
 	// Also check recipe required fields if we have a recipe
+	// Check against recipe's default status
 	if recipe != nil && !hasMissing {
+		targetSt := recipe.DefaultStatus
+		if result.Status > 0 {
+			targetSt = result.Status
+		}
 		for _, v := range recipe.Values {
-			if !v.Required {
+			if !statusIn(v.RequiredAt, targetSt) {
 				continue
 			}
 			found := false
@@ -333,4 +338,13 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 	})
 
 	log.Printf("processed item %d -> record %x", item.ID, record.ID)
+}
+
+func statusIn(statuses []int, st int) bool {
+	for _, s := range statuses {
+		if s == st {
+			return true
+		}
+	}
+	return false
 }

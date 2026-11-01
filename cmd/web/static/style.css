@@ -152,9 +152,20 @@ tr.clickable { cursor: pointer; }
 .add-row {
     font-size: var(--fs-1); color: var(--signal); cursor: pointer; background: none;
     border: 1px dashed var(--line-2); border-radius: var(--r-2); min-height: 44px; padding: var(--s-4); text-align: center;
-    font-family: var(--font-mono);
+    font-family: var(--font-mono); margin-top: var(--s-4);
 }
 .add-row:hover { border-color: var(--signal); background: var(--mod-stat-lt); }
+#rf-values, #rf-scopes { table-layout: fixed; width: 100%; }
+#rf-values th:first-child, #rf-scopes th:first-child { width: auto; }
+#rf-values th:not(:first-child):not(:last-child) { width: 55px; }
+#rf-scopes th:not(:first-child):not(:last-child) { width: 42px; }
+#rf-values th:last-child, #rf-scopes th:last-child { width: 42px; }
+#rf-values input[type="checkbox"], #rf-scopes input[type="checkbox"], #rf-scopes input[type="radio"] { width: 16px; height: 16px; margin: 0; }
+#rf-values .btn-remove, #rf-scopes .btn-remove {
+    background: none; border: none; color: var(--neg); cursor: pointer;
+    font-size: var(--fs-2); width: 34px; height: 34px; border-radius: var(--r-2);
+}
+#rf-values .btn-remove:hover, #rf-scopes .btn-remove:hover { background: var(--neg-lt); }
 
 /* Records — line layout */
 .rec-group { margin-bottom: var(--s-5); }

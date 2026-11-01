@@ -128,7 +128,7 @@ func (s *Server) extractFields(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			req := ""
-			if v.Required {
+			if len(v.RequiredAt) > 0 {
 				req = " (REQUIRED)"
 			}
 			fmt.Fprintf(&ctx, "- %s%s\n", unit, req)
