@@ -225,6 +225,7 @@ type scopeData struct {
 type masterValueData struct {
 	Key  string
 	Desc string
+	DP   int
 }
 
 func (s *Server) listTagsData() ([]tagData, error) {
@@ -262,7 +263,7 @@ func (s *Server) listScopesData() ([]scopeData, error) {
 }
 
 func (s *Server) listMasterValuesData() ([]masterValueData, error) {
-	rows, err := s.mainDB.Query(`SELECT k, d FROM master_value ORDER BY k`)
+	rows, err := s.mainDB.Query(`SELECT k, d, dp FROM master_value ORDER BY k`)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +271,7 @@ func (s *Server) listMasterValuesData() ([]masterValueData, error) {
 	var vals []masterValueData
 	for rows.Next() {
 		var v masterValueData
-		if err := rows.Scan(&v.Key, &v.Desc); err != nil {
+		if err := rows.Scan(&v.Key, &v.Desc, &v.DP); err != nil {
 			return nil, err
 		}
 		vals = append(vals, v)

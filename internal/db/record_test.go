@@ -31,7 +31,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 		);
 		CREATE TABLE master_value (
 			k TEXT PRIMARY KEY,
-			d TEXT NOT NULL
+			d TEXT NOT NULL,
+			dp INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE recipe (
 			u TEXT PRIMARY KEY,
@@ -233,6 +234,80 @@ func TestInsertRecord_NoTags(t *testing.T) {
 	}
 	if err := InsertRecord(db, rec); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestInsertRecord_NewTagAutoCreate(t *testing.T) {
+	db := setupTestDB(t)
+	seedScopes(t, db)
+	seedTags(t, db)
+
+	// "brandnew" doesn't exist in tag table — should be auto-created (unscoped)
+	rec := &RecordFull{
+		Record: Record{ID: makeID(20), Title: "auto tag", Status: 1},
+		Tags:   []string{"urgent", "brandnew"},
+	}
+	if err := InsertRecord(db, rec); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify tag was created
+	var count int
+	db.QueryRow(`SELECT count(*) FROM tag WHERE t='brandnew'`).Scan(&count)
+	if count != 1 {
+		t.Fatalf("expected tag 'brandnew' to be created, count=%d", count)
+	}
+}
+
+func TestInsertRecord_NewTagWithScope(t *testing.T) {
+	db := setupTestDB(t)
+	seedScopes(t, db)
+	seedTags(t, db)
+
+	// "type:swimming" — scope "type" exists (id=1), tag "swimming" doesn't
+	rec := &RecordFull{
+		Record: Record{ID: makeID(21), Title: "scoped auto tag", Status: 1},
+		Tags:   []string{"type:swimming"},
+	}
+	if err := InsertRecord(db, rec); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify tag created with correct scope
+	var scopeID sql.NullInt64
+	db.QueryRow(`SELECT s FROM tag WHERE t='swimming'`).Scan(&scopeID)
+	if !scopeID.Valid || scopeID.Int64 != 1 {
+		t.Fatalf("expected tag 'swimming' with scope_id=1, got %v", scopeID)
+	}
+
+	// Verify scope_path populated in record_tags
+	full, err := GetRecord(db, makeID(21))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(full.ScopePaths) != 1 || full.ScopePaths[0] != "type" {
+		t.Fatalf("expected scope_path 'type' for swimming, got %v", full.ScopePaths)
+	}
+}
+
+func TestInsertRecord_NewTagUnknownScope(t *testing.T) {
+	db := setupTestDB(t)
+	seedScopes(t, db)
+	seedTags(t, db)
+
+	// "nonexistent:foo" — scope doesn't exist, tag created unscoped
+	rec := &RecordFull{
+		Record: Record{ID: makeID(22), Title: "bad scope", Status: 1},
+		Tags:   []string{"nonexistent:foo"},
+	}
+	if err := InsertRecord(db, rec); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	var scopeID sql.NullInt64
+	db.QueryRow(`SELECT s FROM tag WHERE t='foo'`).Scan(&scopeID)
+	if scopeID.Valid {
+		t.Fatalf("expected unscoped tag, got scope_id=%d", scopeID.Int64)
 	}
 }
 

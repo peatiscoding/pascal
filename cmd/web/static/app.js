@@ -153,7 +153,7 @@ function recordLine(r, primaryScopeName) {
         <span class="rec-title">${esc(r.tl)}</span>
         ${tagInfo.length ? `<span class="rec-tags" title="${tagTooltip}"><span class="rec-tag-dots">${tagInfo.map(ti => `<span class="rec-dot${ti.sp ? ' rec-dot-scoped' : ''}"></span>`).join('')}</span></span>` : ''}
         <span class="rec-spacer"></span>
-        ${values.map(v => `<span class="rec-val"><span class="num">${v.v}</span> <span class="unit">${esc(v.k)}</span></span>`).join('')}
+        ${values.map(v => `<span class="rec-val"><span class="num">${v.dp ? v.v.toFixed(v.dp) : v.v}</span> <span class="unit">${esc(v.k)}</span></span>`).join('')}
         ${date ? `<span class="rec-date num">${date}</span>` : ''}
         <span class="rec-del" title="Delete">×</span>
     </div>`;
@@ -194,10 +194,11 @@ function buildCarousel(groups) {
             const chart = buildDailyChart(records, k);
             if (!chart) continue;
             const total = records.reduce((s, r) => s + (r.values || []).reduce((a, v) => v.k === k ? a + v.v : a, 0), 0);
+            const dp = records.flatMap(r => r.values || []).find(v => v.k === k)?.dp || 0;
             slides.push(`<div class="carousel-slide">
                 <div class="carousel-header">
                     <span class="rec-recipe">/${esc(recipe || '—')}</span>
-                    <span class="num">${total}</span> <span class="unit">${esc(k)}</span>
+                    <span class="num">${dp ? total.toFixed(dp) : total}</span> <span class="unit">${esc(k)}</span>
                 </div>
                 ${chart}
             </div>`);
@@ -322,9 +323,9 @@ function showRecordDetail(r) {
             </div>
             <div class="form-group">
                 <label>Status</label>
-                <select id="rd-st">
-                    ${STATUS_LABELS.map((l, i) => `<option value="${i}" ${i === r.st ? 'selected' : ''}>${l}</option>`).join('')}
-                </select>
+                <div class="st-bar" id="rd-st" data-value="${r.st}">
+                    ${STATUS_LABELS.map((l, i) => `<button type="button" class="st-bar-btn st-bar-btn-${i}${i === r.st ? ' active' : ''}" data-st="${i}">${STATUS_ICONS[i]} ${l}</button>`).join('')}
+                </div>
             </div>
             <div class="form-group">
                 <label>Tags</label>
@@ -348,6 +349,16 @@ function showRecordDetail(r) {
         if (e.target === overlay) closeRecordDetail();
     });
     document.body.appendChild(overlay);
+
+    // Wire up status button bar
+    document.getElementById('rd-st').addEventListener('click', (e) => {
+        const btn = e.target.closest('.st-bar-btn');
+        if (!btn) return;
+        const bar = document.getElementById('rd-st');
+        bar.querySelectorAll('.st-bar-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        bar.dataset.value = btn.dataset.st;
+    });
 
     // Wire up tag + value inputs
     let tagInput;
@@ -400,7 +411,7 @@ function showRecordDetail(r) {
     document.getElementById('record-detail-save').onclick = async () => {
         const tl = document.getElementById('rd-tl').value.trim();
         const dt = document.getElementById('rd-dt').value.trim();
-        const st = parseInt(document.getElementById('rd-st').value);
+        const st = parseInt(document.getElementById('rd-st').dataset.value);
         const tags = tagInput ? tagInput.getSelected() : [];
         const values = [];
         valueRows.forEach(vr => {
@@ -426,6 +437,7 @@ function showRecordDetail(r) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
+            invalidateMasterCache();
             closeRecordDetail();
             renderRecords();
         } catch (e) {
@@ -732,14 +744,15 @@ async function renderMasterValues() {
             </div>
             <div id="mv-form-slot"></div>
             <table>
-                <thead><tr><th>Key</th><th>Description</th><th></th></tr></thead>
+                <thead><tr><th>Key</th><th>Description</th><th>Decimals</th><th></th></tr></thead>
                 <tbody>
                     ${(values || []).map(v => `
                         <tr>
                             <td><strong>${esc(v.k)}</strong></td>
                             <td>${esc(v.d)}</td>
+                            <td class="num">${v.dp}</td>
                             <td style="text-align:right">
-                                <button class="btn btn-secondary btn-sm" onclick="showMasterValueForm('${esc(v.k)}','${esc(v.d)}')">Edit</button>
+                                <button class="btn btn-secondary btn-sm" onclick="showMasterValueForm('${esc(v.k)}','${esc(v.d)}',${v.dp})">Edit</button>
                                 <button class="btn btn-danger btn-sm" onclick="deleteMasterValue('${esc(v.k)}')">Delete</button>
                             </td>
                         </tr>
@@ -752,12 +765,13 @@ async function renderMasterValues() {
     }
 }
 
-function showMasterValueForm(key, desc) {
+function showMasterValueForm(key, desc, dp) {
     const isEdit = key != null;
     document.getElementById('mv-form-slot').innerHTML = `
         <form class="inline-form" onsubmit="saveMasterValue(event, ${isEdit})">
             <input id="mv-k" value="${esc(key || '')}" placeholder="Key (e.g. THB)" ${isEdit ? 'disabled' : ''} required>
             <input id="mv-d" value="${esc(desc || '')}" placeholder="Description" required style="flex:2">
+            <input id="mv-dp" type="number" min="0" max="6" value="${dp ?? 0}" placeholder="Decimals" style="width:5em" title="Decimal places (0=integer, 1=hours, 2=currency)">
             <button type="submit" class="btn btn-primary btn-sm">${isEdit ? 'Save' : 'Add'}</button>
             <button type="button" class="btn btn-secondary btn-sm" onclick="this.closest('.inline-form').remove()">Cancel</button>
         </form>
@@ -769,12 +783,13 @@ async function saveMasterValue(e, isEdit) {
     e.preventDefault();
     const k = document.getElementById('mv-k').value.trim();
     const d = document.getElementById('mv-d').value.trim();
+    const dp = parseInt(document.getElementById('mv-dp').value) || 0;
     if (!k || !d) return;
     try {
         if (isEdit) {
-            await api('/api/master-values/' + encodeURIComponent(k), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k, d }) });
+            await api('/api/master-values/' + encodeURIComponent(k), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k, d, dp }) });
         } else {
-            await api('/api/master-values', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k, d }) });
+            await api('/api/master-values', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k, d, dp }) });
         }
         _masterValues = null; // invalidate cache
         renderMasterValues();
@@ -992,9 +1007,19 @@ function openSpotlight() {
     overlay.className = 'spotlight-overlay';
     overlay.innerHTML = `
         <div class="spotlight-box">
-            <textarea id="spotlight-input" rows="3" placeholder="Log something... /expense Lunch 200 THB" autocomplete="off"></textarea>
-            <div id="spotlight-hint" class="spotlight-hint">\u21B5 to send \u00b7 esc to close</div>
+            <div class="spotlight-wrap">
+                <div id="spotlight-backdrop" class="spotlight-backdrop" aria-hidden="true"></div>
+                <textarea id="spotlight-input" rows="3" placeholder="Log something... /expense Lunch 200 THB" autocomplete="off"></textarea>
+            </div>
+            <div id="spotlight-shortcuts" class="spotlight-shortcuts">
+                <button type="button" class="spotlight-key" data-insert="/">/</button>
+                <button type="button" class="spotlight-key" data-insert="#">#</button>
+                <button type="button" class="spotlight-key" data-key="Enter">\u21B5</button>
+                <button type="button" class="spotlight-key" data-key="Escape">esc</button>
+            </div>
+            <div id="spotlight-hint" class="spotlight-hint">/recipe \u00b7 #tag \u00b7 \u21B5 send \u00b7 esc close</div>
             <div id="spotlight-recipes" class="spotlight-hint" style="display:none"></div>
+            <div id="spotlight-tags" class="spotlight-hint" style="display:none"></div>
         </div>
     `;
     document.body.appendChild(overlay);
@@ -1002,7 +1027,35 @@ function openSpotlight() {
     const input = document.getElementById('spotlight-input');
     const hint = document.getElementById('spotlight-hint');
     const recipesHint = document.getElementById('spotlight-recipes');
+    const tagHintEl = document.getElementById('spotlight-tags');
+    const backdrop = document.getElementById('spotlight-backdrop');
     input.focus();
+
+    function updateBackdrop() {
+        const text = input.value;
+        if (!text) { backdrop.innerHTML = ''; return; }
+        backdrop.innerHTML = esc(text).replace(/#([a-zA-Z0-9_:-]+)/g, (m) =>
+            `<span class="spotlight-tag">${m}</span>`
+        );
+    }
+    input.addEventListener('scroll', () => { backdrop.scrollTop = input.scrollTop; });
+
+    // Shortcut key buttons
+    document.querySelectorAll('.spotlight-key').forEach(btn => {
+        btn.onmousedown = (e) => e.preventDefault(); // keep focus on textarea
+        btn.onclick = () => {
+            const insert = btn.dataset.insert;
+            if (insert) {
+                const pos = input.selectionStart;
+                input.value = input.value.slice(0, pos) + insert + input.value.slice(pos);
+                input.focus();
+                input.setSelectionRange(pos + 1, pos + 1);
+                input.dispatchEvent(new Event('input'));
+            } else if (btn.dataset.key) {
+                input.dispatchEvent(new KeyboardEvent('keydown', { key: btn.dataset.key, bubbles: true }));
+            }
+        };
+    });
 
     // Cache recipes for slash hint
     let _cachedRecipes = null;
@@ -1011,8 +1064,28 @@ function openSpotlight() {
         return _cachedRecipes;
     }
 
+    // Cache tags
+    let _cachedTags = null;
+    async function getTags() {
+        if (!_cachedTags) _cachedTags = await api('/api/tags').catch(() => []);
+        return _cachedTags;
+    }
+
     let slashMatches = [];
-    let slashIdx = -1; // focused index in slashMatches
+    let slashIdx = -1;
+
+    // Tag state
+    let hasRecipe = false;
+    let recipeScopes = [];
+    let tagMatches = [];
+    let tagIdx = -1;
+    let tagAnchor = -1;
+
+    // Parse #scope:tag and #tag tokens from text
+    function parseInlineTags(text) {
+        const matches = text.match(/#[a-zA-Z0-9_:-]+/g) || [];
+        return matches.map(m => m.slice(1)); // remove # only, keep scope:tag format
+    }
 
     overlay.onclick = (e) => { if (e.target === overlay) closeSpotlight(); };
 
@@ -1029,16 +1102,65 @@ function openSpotlight() {
         });
     }
 
-    function confirmRecipeChoice(u) {
+    const slashBtn = document.querySelector('.spotlight-key[data-insert="/"]');
+
+    async function confirmRecipeChoice(u) {
         input.value = '/' + u + ' ';
         input.focus();
         slashMatches = [];
         slashIdx = -1;
         recipesHint.style.display = 'none';
+        hasRecipe = true;
+        slashBtn.style.display = 'none';
+        // Cache recipe scopes for tag prioritization
+        const recipes = await getRecipes();
+        const recipe = recipes.find(r => r.u === u);
+        recipeScopes = (recipe && recipe.scopes) ? recipe.scopes.map(s => s.scope_name) : [];
+    }
+
+    function renderTagHints() {
+        if (tagMatches.length === 0) {
+            tagHintEl.style.display = 'none';
+            return;
+        }
+        tagHintEl.style.display = 'block';
+        tagHintEl.innerHTML = tagMatches.slice(0, 8).map((t, i) => {
+            const isNew = t._isNew;
+            const bg = isNew ? 'background:var(--warn-lt);color:var(--warn)'
+                             : 'background:var(--mod-stat-lt);color:var(--mod-stat-dk)';
+            const outline = i === tagIdx ? ';outline:var(--focus);outline-offset:1px' : '';
+            const scope = (!isNew && t.scope_name) ? ` <span style="color:var(--ink-4);font-size:var(--fs-0)">${esc(t.scope_name)}</span>` : '';
+            const label = isNew ? `${t.scope_name ? esc(t.scope_name) + ':' : ''}${esc(t.t)} (new)` : esc(t.t);
+            return `<span class="badge" style="${bg}${outline};margin:var(--s-1);cursor:pointer" data-ti="${i}">${label}${scope}</span>`;
+        }).join(' ');
+        tagHintEl.querySelectorAll('[data-ti]').forEach(el => {
+            el.onclick = () => confirmTagChoice(tagMatches[parseInt(el.dataset.ti)]);
+        });
+    }
+
+    function formatTagToken(tag) {
+        return tag.scope_name ? '#' + tag.scope_name + ':' + tag.t : '#:' + tag.t;
+    }
+
+    function confirmTagChoice(tag) {
+        const val = input.value;
+        const before = val.slice(0, tagAnchor);
+        const after = val.slice(input.selectionStart);
+        const fullTag = formatTagToken(tag);
+        input.value = before + fullTag + ' ' + after;
+        tagMatches = [];
+        tagIdx = -1;
+        tagHintEl.style.display = 'none';
+        input.focus();
+        const newPos = before.length + fullTag.length + 1;
+        input.setSelectionRange(newPos, newPos);
+        updateBackdrop();
     }
 
     input.oninput = async () => {
+        updateBackdrop();
         const val = input.value;
+        // Slash recipe detection
         if (val.startsWith('/') && !val.includes(' ')) {
             const recipes = await getRecipes();
             const typed = val.slice(1).toLowerCase();
@@ -1046,15 +1168,109 @@ function openSpotlight() {
             slashIdx = -1;
             recipesHint.style.display = 'block';
             renderRecipeHints();
+            tagHintEl.style.display = 'none';
+            return;
         } else {
             slashMatches = [];
             slashIdx = -1;
-            recipesHint.style.display = val.startsWith('/') ? 'none' : 'none';
+            recipesHint.style.display = 'none';
         }
+
+        // Tag detection (active when /recipe prefix present)
+        const slashRecipeMatch = val.match(/^\/(\S+)\s/);
+        if (slashRecipeMatch) {
+            // Lazy-load recipe scopes if not yet loaded
+            if (!hasRecipe) {
+                hasRecipe = true;
+                slashBtn.style.display = 'none';
+                const recipes = await getRecipes();
+                const recipe = recipes.find(r => r.u === slashRecipeMatch[1]);
+                recipeScopes = (recipe && recipe.scopes) ? recipe.scopes.map(s => s.scope_name) : [];
+            }
+            const pos = input.selectionStart;
+            const textBeforeCursor = val.slice(0, pos);
+            const hashMatch = textBeforeCursor.match(/#([a-zA-Z0-9_:-]*)$/);
+            if (hashMatch) {
+                tagAnchor = pos - hashMatch[0].length;
+                const raw = hashMatch[1] || '';
+                const allTags = await getTags();
+
+                let scopeFilter = null;
+                let termFilter = raw;
+                if (raw.includes(':')) {
+                    const parts = raw.split(':');
+                    scopeFilter = parts[0].toLowerCase();
+                    termFilter = parts.slice(1).join(':').toLowerCase();
+                } else {
+                    termFilter = raw.toLowerCase();
+                }
+
+                // Exclude the current #fragment being typed from used tags
+                // Exclude the current #fragment being typed from used tags
+                const textWithoutCurrent = val.slice(0, tagAnchor) + val.slice(input.selectionStart);
+                const usedNames = parseInlineTags(textWithoutCurrent).map(u => { const c = u.indexOf(':'); return c >= 0 ? u.slice(c+1) : u; });
+                tagMatches = allTags.filter(t => {
+                    if (usedNames.includes(t.t)) return false;
+                    if (scopeFilter && (!t.scope_name || !t.scope_name.toLowerCase().startsWith(scopeFilter))) return false;
+                    return t.t.toLowerCase().includes(termFilter);
+                });
+
+                // Sort: recipe scope tags first
+                if (recipeScopes.length > 0) {
+                    tagMatches.sort((a, b) => {
+                        const aIn = recipeScopes.includes(a.scope_name) ? 0 : 1;
+                        const bIn = recipeScopes.includes(b.scope_name) ? 0 : 1;
+                        return aIn - bIn || a.t.localeCompare(b.t);
+                    });
+                }
+
+                // Add "new tag" option if no exact match
+                if (termFilter && !tagMatches.find(t => t.t.toLowerCase() === termFilter)) {
+                    tagMatches.push({ t: termFilter, scope_name: scopeFilter || null, d: '', _isNew: true });
+                }
+
+                tagIdx = -1;
+                renderTagHints();
+                return;
+            }
+        }
+        tagMatches = [];
+        tagIdx = -1;
+        tagHintEl.style.display = 'none';
     };
 
     input.onkeydown = async (e) => {
-        if (e.key === 'Escape') { closeSpotlight(); return; }
+        if (e.key === 'Escape') {
+            if (tagMatches.length > 0) {
+                tagMatches = []; tagIdx = -1; tagHintEl.style.display = 'none';
+                return;
+            }
+            closeSpotlight();
+            return;
+        }
+
+        // Tag mode: Tab cycles, Enter/Space confirms
+        if (tagMatches.length > 0) {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                if (tagMatches.length === 1) { confirmTagChoice(tagMatches[0]); return; }
+                tagIdx = (tagIdx + 1) % tagMatches.length;
+                renderTagHints();
+                return;
+            }
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                if (tagMatches.length === 1) { confirmTagChoice(tagMatches[0]); return; }
+                if (tagIdx >= 0) { confirmTagChoice(tagMatches[tagIdx]); return; }
+                // Space with no selection: confirm exact match or first match
+                if (e.key === ' ') {
+                    const typed = input.value.slice(tagAnchor + 1, input.selectionStart).toLowerCase();
+                    const exact = tagMatches.find(t => t.t.toLowerCase() === typed);
+                    confirmTagChoice(exact || tagMatches[0]);
+                }
+                return;
+            }
+        }
 
         // Tab cycles recipe choices when in slash mode
         if (e.key === 'Tab' && slashMatches.length > 0) {
@@ -1076,7 +1292,6 @@ function openSpotlight() {
             } else if (slashIdx >= 0) {
                 confirmRecipeChoice(slashMatches[slashIdx].u);
             }
-            // If multiple and none focused, do nothing (need Tab first)
             return;
         }
 
@@ -1089,14 +1304,24 @@ function openSpotlight() {
             const slashMatch = raw.match(/^\/(\S+)\s+([\s\S]+)/);
             if (raw.startsWith('/') && !slashMatch) return;
 
-            let payload = { text: raw, source: 'web' };
+            // Parse inline #scope:tag and #tag tokens
+            const hintTags = parseInlineTags(raw);
+            // Strip all #tokens from text
+            let cleanText = raw.replace(/#[a-zA-Z0-9_:-]+\s*/g, '').trim();
+
+            let payload = { text: cleanText, source: 'web' };
             if (slashMatch) {
-                payload = { text: slashMatch[2], source: 'web', recipe_u: slashMatch[1] };
+                const textAfterRecipe = cleanText.replace(/^\/\S+\s*/, '');
+                payload = { text: textAfterRecipe, source: 'web', recipe_u: slashMatch[1] };
+            }
+            if (hintTags.length > 0) {
+                payload.hint_tags = hintTags;
             }
 
             input.disabled = true;
             hint.textContent = slashMatch ? `Sending with /${slashMatch[1]}...` : 'Sending...';
             recipesHint.style.display = 'none';
+            tagHintEl.style.display = 'none';
             try {
                 const resp = await fetch(API + '/api/ingest/text', {
                     method: 'POST',
@@ -1312,6 +1537,7 @@ function renderDraftContent(item, queueId) {
                         body: JSON.stringify(body),
                     });
                 }
+                invalidateMasterCache();
                 el.innerHTML = `
                     <div class="draft-status">
                         <p style="color:var(--pos);font-weight:600">Record saved!</p>
@@ -1473,6 +1699,7 @@ function renderDraftContent(item, queueId) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ tl, st: partial.st || 3, tags, values, r: item.recipe_u }),
                 });
+                invalidateMasterCache();
                 clearInterval(draftPollTimer);
                 el.innerHTML = `
                     <div class="draft-status">
@@ -1613,8 +1840,9 @@ function createTagInput(container, suggestions, selected, opts = {}) {
     };
 }
 
-// Fetch master data for autocomplete (cached per page load)
+// Fetch master data for autocomplete (cached, invalidated on record save)
 let _masterCache = null;
+function invalidateMasterCache() { _masterCache = null; }
 async function fetchMasterData() {
     if (_masterCache) return _masterCache;
     const [tags, scopes, values] = await Promise.all([

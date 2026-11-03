@@ -10,6 +10,7 @@ type QueueItem struct {
 	Payload     string  `json:"payload"`
 	Source      string  `json:"source"`
 	RecipeU     *string `json:"recipe_u,omitempty"`
+	HintTags    *string `json:"hint_tags,omitempty"`
 	Result      *string `json:"result,omitempty"`
 	Status      string  `json:"status"`
 	Attempts    int     `json:"attempts"`
@@ -21,16 +22,16 @@ type QueueItem struct {
 func GetQueueItem(db *sql.DB, id int) (*QueueItem, error) {
 	item := &QueueItem{}
 	err := db.QueryRow(
-		`SELECT id, payload, source, recipe_u, result, status, attempts, error, created_at, processed_at
+		`SELECT id, payload, source, recipe_u, hint_tags, result, status, attempts, error, created_at, processed_at
 		 FROM ingest_queue WHERE id=?`, id,
-	).Scan(&item.ID, &item.Payload, &item.Source, &item.RecipeU, &item.Result, &item.Status, &item.Attempts, &item.Error, &item.CreatedAt, &item.ProcessedAt)
+	).Scan(&item.ID, &item.Payload, &item.Source, &item.RecipeU, &item.HintTags, &item.Result, &item.Status, &item.Attempts, &item.Error, &item.CreatedAt, &item.ProcessedAt)
 	if err != nil {
 		return nil, err
 	}
 	return item, nil
 }
 
-func Enqueue(db *sql.DB, payload, source string, recipeU *string) (int64, error) {
+func Enqueue(db *sql.DB, payload, source string, recipeU *string, hintTags *string) (int64, error) {
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ingest_queue WHERE status='pending'`).Scan(&count); err != nil {
 		return 0, err
@@ -40,8 +41,8 @@ func Enqueue(db *sql.DB, payload, source string, recipeU *string) (int64, error)
 	}
 
 	res, err := db.Exec(
-		`INSERT INTO ingest_queue (payload, source, recipe_u) VALUES (?, ?, ?)`,
-		payload, source, recipeU,
+		`INSERT INTO ingest_queue (payload, source, recipe_u, hint_tags) VALUES (?, ?, ?, ?)`,
+		payload, source, recipeU, hintTags,
 	)
 	if err != nil {
 		return 0, err
@@ -58,12 +59,12 @@ func DequeueNext(db *sql.DB) (*QueueItem, error) {
 
 	item := &QueueItem{}
 	err = tx.QueryRow(
-		`SELECT id, payload, source, recipe_u, result, status, attempts, error, created_at
+		`SELECT id, payload, source, recipe_u, hint_tags, result, status, attempts, error, created_at
 		 FROM ingest_queue
 		 WHERE status='pending'
 		 ORDER BY created_at
 		 LIMIT 1`,
-	).Scan(&item.ID, &item.Payload, &item.Source, &item.RecipeU, &item.Result, &item.Status, &item.Attempts, &item.Error, &item.CreatedAt)
+	).Scan(&item.ID, &item.Payload, &item.Source, &item.RecipeU, &item.HintTags, &item.Result, &item.Status, &item.Attempts, &item.Error, &item.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -114,25 +115,34 @@ func SetQueueResult(db *sql.DB, id int, status, result string) error {
 
 // Master data query helpers used by the worker for prompt context.
 
-type TagInfo struct {
-	Name string
+type TagWithScope struct {
+	Name      string
+	ScopeName *string
 }
 
-func ListTagNames(db *sql.DB) ([]string, error) {
-	rows, err := db.Query(`SELECT t FROM tag ORDER BY t`)
+func ListTagsWithScope(db *sql.DB) ([]TagWithScope, error) {
+	rows, err := db.Query(`SELECT t.t, s.name FROM tag t LEFT JOIN scope s ON t.s = s.id ORDER BY t.t`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var names []string
+	var tags []TagWithScope
 	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
+		var t TagWithScope
+		if err := rows.Scan(&t.Name, &t.ScopeName); err != nil {
 			return nil, err
 		}
-		names = append(names, n)
+		tags = append(tags, t)
 	}
-	return names, nil
+	return tags, nil
+}
+
+// FormatTagHash returns #tag or #scope:tag for prompt display.
+func (t TagWithScope) FormatTagHash() string {
+	if t.ScopeName != nil {
+		return "#" + *t.ScopeName + ":" + t.Name
+	}
+	return "#" + t.Name
 }
 
 func ListScopeNames(db *sql.DB) ([]string, error) {

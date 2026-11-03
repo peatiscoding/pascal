@@ -93,7 +93,7 @@ func (s *Server) deleteRecipe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listMasterValues(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.mainDB.Query(`SELECT k, d FROM master_value ORDER BY k`)
+	rows, err := s.mainDB.Query(`SELECT k, d, dp FROM master_value ORDER BY k`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -101,14 +101,15 @@ func (s *Server) listMasterValues(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type masterValue struct {
-		Key         string `json:"k"`
-		Description string `json:"d"`
+		Key           string `json:"k"`
+		Description   string `json:"d"`
+		DecimalPlaces int    `json:"dp"`
 	}
 
 	var values []masterValue
 	for rows.Next() {
 		var v masterValue
-		if err := rows.Scan(&v.Key, &v.Description); err != nil {
+		if err := rows.Scan(&v.Key, &v.Description, &v.DecimalPlaces); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

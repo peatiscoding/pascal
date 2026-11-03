@@ -16,8 +16,9 @@ type Record struct {
 }
 
 type RecordValue struct {
-	Key   string  `json:"k"`
-	Value float64 `json:"v"`
+	Key           string  `json:"k"`
+	Value         float64 `json:"v"`
+	DecimalPlaces int     `json:"dp"`
 }
 
 type RecordTag struct {
@@ -91,31 +92,57 @@ func BuildScopePath(tx *sql.Tx, scopeID int) (string, error) {
 
 // insertTagsExclusive inserts tags enforcing: max one tag per scope group.
 // Computes scope_path for scoped tags.
+// Tags may use scope:tag format — if tag doesn't exist it is auto-created
+// (with scope FK when scope name is provided and exists).
 func insertTagsExclusive(tx *sql.Tx, recordID []byte, tags []string) error {
 	scopeSeen := map[int]string{} // scope_id -> tag already used
-	for _, tag := range tags {
+	for _, raw := range tags {
+		// Parse optional scope:tag format
+		scopeHint := ""
+		tagName := raw
+		if idx := strings.Index(raw, ":"); idx >= 0 {
+			scopeHint = raw[:idx]
+			tagName = raw[idx+1:]
+		}
+
 		var scopeID sql.NullInt64
-		err := tx.QueryRow(`SELECT s FROM tag WHERE t=?`, tag).Scan(&scopeID)
-		if err != nil {
-			return fmt.Errorf("lookup tag %s: %w", tag, err)
+		err := tx.QueryRow(`SELECT s FROM tag WHERE t=?`, tagName).Scan(&scopeID)
+		if err == sql.ErrNoRows {
+			// Auto-create tag in same transaction
+			var sPtr *int64
+			if scopeHint != "" {
+				var sid int64
+				if err := tx.QueryRow(`SELECT id FROM scope WHERE name=?`, scopeHint).Scan(&sid); err == nil {
+					sPtr = &sid
+				}
+				// If scope not found, create tag without scope
+			}
+			if _, err := tx.Exec(`INSERT INTO tag (t, s, d) VALUES (?, ?, '')`, tagName, sPtr); err != nil {
+				return fmt.Errorf("create tag %s: %w", tagName, err)
+			}
+			if sPtr != nil {
+				scopeID = sql.NullInt64{Int64: *sPtr, Valid: true}
+			}
+		} else if err != nil {
+			return fmt.Errorf("lookup tag %s: %w", tagName, err)
 		}
 
 		var scopePath *string
 		if scopeID.Valid {
 			sid := int(scopeID.Int64)
 			if existing, ok := scopeSeen[sid]; ok {
-				return fmt.Errorf("tag conflict: '%s' and '%s' share scope (only one per scope allowed)", existing, tag)
+				return fmt.Errorf("tag conflict: '%s' and '%s' share scope (only one per scope allowed)", existing, tagName)
 			}
-			scopeSeen[sid] = tag
+			scopeSeen[sid] = tagName
 			path, err := BuildScopePath(tx, sid)
 			if err != nil {
-				return fmt.Errorf("build scope path for tag %s: %w", tag, err)
+				return fmt.Errorf("build scope path for tag %s: %w", tagName, err)
 			}
 			scopePath = &path
 		}
 
-		if _, err := tx.Exec(`INSERT INTO record_tags (record_id, tag, scope_path) VALUES (?, ?, ?)`, recordID, tag, scopePath); err != nil {
-			return fmt.Errorf("insert tag %s: %w", tag, err)
+		if _, err := tx.Exec(`INSERT INTO record_tags (record_id, tag, scope_path) VALUES (?, ?, ?)`, recordID, tagName, scopePath); err != nil {
+			return fmt.Errorf("insert tag %s: %w", tagName, err)
 		}
 	}
 	return nil
@@ -301,14 +328,14 @@ func hydrateRecord(d *sql.DB, r *RecordFull) (*RecordFull, error) {
 		r.TagInfo = append(r.TagInfo, ti)
 	}
 
-	vrows, err := d.Query(`SELECT k, v FROM record_values WHERE id=?`, r.ID)
+	vrows, err := d.Query(`SELECT rv.k, rv.v, COALESCE(mv.dp, 0) FROM record_values rv LEFT JOIN master_value mv ON rv.k = mv.k WHERE rv.id=?`, r.ID)
 	if err != nil {
 		return nil, err
 	}
 	defer vrows.Close()
 	for vrows.Next() {
 		var rv RecordValue
-		if err := vrows.Scan(&rv.Key, &rv.Value); err != nil {
+		if err := vrows.Scan(&rv.Key, &rv.Value, &rv.DecimalPlaces); err != nil {
 			return nil, err
 		}
 		r.Values = append(r.Values, rv)

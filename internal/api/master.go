@@ -15,8 +15,9 @@ import (
 // --- Master Values ---
 
 type masterValueReq struct {
-	Key         string `json:"k"`
-	Description string `json:"d"`
+	Key            string `json:"k"`
+	Description    string `json:"d"`
+	DecimalPlaces  int    `json:"dp"`
 }
 
 func (s *Server) createMasterValue(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +30,7 @@ func (s *Server) createMasterValue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "k and d required", http.StatusBadRequest)
 		return
 	}
-	if _, err := s.mainDB.Exec(`INSERT INTO master_value (k, d) VALUES (?, ?)`, req.Key, req.Description); err != nil {
+	if _, err := s.mainDB.Exec(`INSERT INTO master_value (k, d, dp) VALUES (?, ?, ?)`, req.Key, req.Description, req.DecimalPlaces); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -45,7 +46,7 @@ func (s *Server) updateMasterValue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	res, err := s.mainDB.Exec(`UPDATE master_value SET d=? WHERE k=?`, req.Description, k)
+	res, err := s.mainDB.Exec(`UPDATE master_value SET d=?, dp=? WHERE k=?`, req.Description, req.DecimalPlaces, k)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

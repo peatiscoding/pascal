@@ -11,9 +11,10 @@ import (
 )
 
 type ingestRequest struct {
-	Text    string  `json:"text"`
-	Source  string  `json:"source"`
-	RecipeU *string `json:"recipe_u,omitempty"`
+	Text     string   `json:"text"`
+	Source   string   `json:"source"`
+	RecipeU  *string  `json:"recipe_u,omitempty"`
+	HintTags []string `json:"hint_tags,omitempty"`
 }
 
 type ingestResponse struct {
@@ -36,7 +37,14 @@ func (s *Server) ingestText(w http.ResponseWriter, r *http.Request) {
 		req.Source = "api"
 	}
 
-	queueID, err := db.Enqueue(s.queueDB, req.Text, req.Source, req.RecipeU)
+	var hintTagsJSON *string
+	if len(req.HintTags) > 0 {
+		b, _ := json.Marshal(req.HintTags)
+		ht := string(b)
+		hintTagsJSON = &ht
+	}
+
+	queueID, err := db.Enqueue(s.queueDB, req.Text, req.Source, req.RecipeU, hintTagsJSON)
 	if err != nil {
 		if err.Error() == "queue full" {
 			http.Error(w, "queue full", http.StatusTooManyRequests)

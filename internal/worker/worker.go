@@ -165,7 +165,7 @@ func (w *Worker) phaseExtract(item *db.QueueItem, recipeU string) {
 		return
 	}
 
-	tags, _ := db.ListTagNames(w.mainDB)
+	tags, _ := db.ListTagsWithScope(w.mainDB)
 	masterVals, _ := db.ListMasterValues(w.mainDB)
 
 	var ctx strings.Builder
@@ -197,7 +197,18 @@ func (w *Worker) phaseExtract(item *db.QueueItem, recipeU string) {
 			if sc.Required {
 				req = " (REQUIRED)"
 			}
-			fmt.Fprintf(&ctx, "- %s%s\n", sc.ScopeName, req)
+			// List tags in this scope
+			var scopeTags []string
+			for _, t := range tags {
+				if t.ScopeName != nil && *t.ScopeName == sc.ScopeName {
+					scopeTags = append(scopeTags, t.FormatTagHash())
+				}
+			}
+			fmt.Fprintf(&ctx, "- %s%s", sc.ScopeName, req)
+			if len(scopeTags) > 0 {
+				fmt.Fprintf(&ctx, " — choices: %s", strings.Join(scopeTags, ", "))
+			}
+			ctx.WriteString("\n")
 		}
 	}
 
@@ -205,18 +216,35 @@ func (w *Worker) phaseExtract(item *db.QueueItem, recipeU string) {
 }
 
 func (w *Worker) extractNoRecipe(item *db.QueueItem) {
-	tags, _ := db.ListTagNames(w.mainDB)
+	tags, _ := db.ListTagsWithScope(w.mainDB)
 	w.doExtract(item, "", tags, nil)
 }
 
-func (w *Worker) doExtract(item *db.QueueItem, recipeCtx string, tags []string, recipe *db.RecipeFull) {
+func (w *Worker) doExtract(item *db.QueueItem, recipeCtx string, tags []db.TagWithScope, recipe *db.RecipeFull) {
+	// Parse hint tags from queue item
+	var hintTags []string
+	if item.HintTags != nil {
+		json.Unmarshal([]byte(*item.HintTags), &hintTags)
+	}
+
 	var promptCtx strings.Builder
 	if recipeCtx != "" {
 		promptCtx.WriteString(recipeCtx)
 		promptCtx.WriteString("\n")
 	}
 	if len(tags) > 0 {
-		fmt.Fprintf(&promptCtx, "Available tags: %s\n", strings.Join(tags, ", "))
+		tagStrs := make([]string, len(tags))
+		for i, t := range tags {
+			tagStrs[i] = t.FormatTagHash()
+		}
+		fmt.Fprintf(&promptCtx, "Available tags: %s\n", strings.Join(tagStrs, ", "))
+	}
+	if len(hintTags) > 0 {
+		hintStrs := make([]string, len(hintTags))
+		for i, t := range hintTags {
+			hintStrs[i] = "#" + t
+		}
+		fmt.Fprintf(&promptCtx, "User has already selected: %s. Always include these tags in your response.\n", strings.Join(hintStrs, ", "))
 	}
 
 	statusHint := "Default 3 for completed actions, 1 for future tasks."
@@ -230,7 +258,7 @@ Return JSON only with these fields:
 - tl (string): title/summary
 - dt (string, optional): detail
 - st (int): status 0=paused, 1=todo, 2=doing, 3=done. %s
-- tags (string[]): pick from available tags only. Include tags from required scopes.
+- tags (string[]): tag names ONLY — no # prefix, no scope prefix. For example if the tag is listed as #payment-source:cash, return just "cash". Include tags from required scopes.
 - values (object[]): each with "k" (value type key) and "v" (number)
 - missing (string[]): list any REQUIRED fields you could not find in the text
 
@@ -248,6 +276,35 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 		log.Printf("parse extract response for item %d: %v (raw: %s)", item.ID, err, resp)
 		db.MarkFailed(w.queueDB, item.ID, fmt.Sprintf("parse: %v", err))
 		return
+	}
+
+	// Strip any scope prefix (e.g. "payment-source:cash" → "cash") and # prefix from tags
+	for i, t := range result.Tags {
+		t = strings.TrimPrefix(t, "#")
+		if idx := strings.LastIndex(t, ":"); idx >= 0 {
+			t = t[idx+1:]
+		}
+		result.Tags[i] = t
+	}
+
+	// Merge hint tags into result (deduplicated by tag name).
+	// Hint tags may carry scope:tag format — prefer hint version over Ollama's plain name.
+	if len(hintTags) > 0 {
+		hintMap := make(map[string]string) // tagName → full hint string
+		for _, h := range hintTags {
+			hintMap[bareTagName(h)] = h
+		}
+		// Replace matching result tags with hint version (preserves scope info)
+		for i, t := range result.Tags {
+			if h, ok := hintMap[t]; ok {
+				result.Tags[i] = h
+				delete(hintMap, t)
+			}
+		}
+		// Append remaining hints
+		for _, h := range hintMap {
+			result.Tags = append(result.Tags, h)
+		}
 	}
 
 	// Check for missing required fields
@@ -338,6 +395,14 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 	})
 
 	log.Printf("processed item %d -> record %x", item.ID, record.ID)
+}
+
+// bareTagName extracts tag name from optional scope:tag format.
+func bareTagName(t string) string {
+	if idx := strings.LastIndex(t, ":"); idx >= 0 {
+		return t[idx+1:]
+	}
+	return t
 }
 
 func statusIn(statuses []int, st int) bool {
