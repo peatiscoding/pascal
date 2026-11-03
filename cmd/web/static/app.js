@@ -8,6 +8,8 @@ function autoResize(el) {
     el.style.height = el.scrollHeight + 'px';
 }
 
+function bareTag(t) { const i = t.lastIndexOf(':'); return i >= 0 ? t.slice(i + 1) : t; }
+
 const STATUS_LABELS = ['Paused', 'Todo', 'Doing', 'Done'];
 function statusLabel(st) { return `<span class="badge badge-st-${st}">${STATUS_LABELS[st] || st}</span>`; }
 function b64ToHex(b64) { return [...atob(b64)].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(''); }
@@ -1018,20 +1020,19 @@ function openSpotlight() {
     overlay.className = 'spotlight-overlay';
     overlay.innerHTML = `
         <div class="spotlight-box">
-            <div class="spotlight-wrap">
-                <div id="spotlight-backdrop" class="spotlight-backdrop" aria-hidden="true"></div>
-                <textarea id="spotlight-input" rows="3" placeholder="Log something... /expense Lunch 200 THB" autocomplete="off"></textarea>
-            </div>
+            <div id="spotlight-input" class="spotlight-editable" contenteditable="true" role="textbox" data-placeholder="Log something... /expense Lunch 200 THB"></div>
             <div id="spotlight-shortcuts" class="spotlight-shortcuts">
                 <button type="button" class="spotlight-key" data-key="Escape">esc</button>
                 <span style="flex:1"></span>
                 <button type="button" class="spotlight-key" data-insert="/">/</button>
                 <button type="button" class="spotlight-key" data-insert="#">#</button>
+                <button type="button" class="spotlight-key" data-insert="@">@</button>
                 <button type="button" class="spotlight-key" data-key="Enter">\u21B5</button>
             </div>
-            <div id="spotlight-hint" class="spotlight-hint">/recipe \u00b7 #tag \u00b7 \u21B5 send \u00b7 esc close</div>
+            <div id="spotlight-hint" class="spotlight-hint">/recipe \u00b7 #tag \u00b7 @value(n) \u00b7 \u21B5 send \u00b7 esc close</div>
             <div id="spotlight-recipes" class="spotlight-hint" style="display:none"></div>
             <div id="spotlight-tags" class="spotlight-hint" style="display:none"></div>
+            <div id="spotlight-values" class="spotlight-hint" style="display:none"></div>
         </div>
     `;
     document.body.appendChild(overlay);
@@ -1040,34 +1041,77 @@ function openSpotlight() {
     const hint = document.getElementById('spotlight-hint');
     const recipesHint = document.getElementById('spotlight-recipes');
     const tagHintEl = document.getElementById('spotlight-tags');
-    const backdrop = document.getElementById('spotlight-backdrop');
     input.focus();
 
-    function updateBackdrop() {
-        const text = input.value;
-        if (!text) { backdrop.innerHTML = ''; return; }
-        backdrop.innerHTML = esc(text).replace(/#([a-zA-Z0-9_:-]+)/g, (m) =>
-            `<span class="spotlight-tag">${m}</span>`
-        );
+    // Contenteditable helpers
+    function getText() { return input.textContent || ''; }
+    function getCursorOffset() {
+        const sel = window.getSelection();
+        if (!sel.rangeCount) return 0;
+        const range = sel.getRangeAt(0).cloneRange();
+        range.selectNodeContents(input);
+        range.setEnd(sel.focusNode, sel.focusOffset);
+        return range.toString().length;
     }
-    input.addEventListener('scroll', () => { backdrop.scrollTop = input.scrollTop; });
-    input.addEventListener('input', () => { autoResize(input); backdrop.style.height = input.style.height; });
+    function setCursorOffset(offset) {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        let pos = 0;
+        const walker = document.createTreeWalker(input, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+            const node = walker.currentNode;
+            if (pos + node.length >= offset) {
+                range.setStart(node, offset - pos);
+                range.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(range);
+                return;
+            }
+            pos += node.length;
+        }
+        // Fallback: end
+        range.selectNodeContents(input);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+
+    function highlightInput() {
+        const text = getText();
+        const offset = getCursorOffset();
+        const html = esc(text)
+            .replace(/(^\/\S+)/g, '<span class="spotlight-recipe">$1</span>')
+            .replace(/#([a-zA-Z0-9_:-]+)/g, '<span class="spotlight-tag">#$1</span>')
+            .replace(/@([a-zA-Z0-9_-]+(?:\([^)]*\))?)/g, '<span class="spotlight-value">@$1</span>');
+        if (input.innerHTML !== html) {
+            input.innerHTML = html;
+            setCursorOffset(offset);
+        }
+    }
 
     // Shortcut key buttons
     document.querySelectorAll('.spotlight-key').forEach(btn => {
-        btn.onmousedown = (e) => e.preventDefault(); // keep focus on textarea
+        btn.onmousedown = (e) => e.preventDefault(); // keep focus on input
         btn.onclick = () => {
             const insert = btn.dataset.insert;
             if (insert) {
-                const pos = input.selectionStart;
-                input.value = input.value.slice(0, pos) + insert + input.value.slice(pos);
-                input.focus();
-                input.setSelectionRange(pos + 1, pos + 1);
+                const pos = getCursorOffset();
+                const text = getText();
+                input.textContent = text.slice(0, pos) + insert + text.slice(pos);
+                highlightInput();
+                setCursorOffset(pos + 1);
                 input.dispatchEvent(new Event('input'));
             } else if (btn.dataset.key) {
                 input.dispatchEvent(new KeyboardEvent('keydown', { key: btn.dataset.key, bubbles: true }));
             }
         };
+    });
+
+    // Paste as plain text only
+    input.addEventListener('paste', (e) => {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+        document.execCommand('insertText', false, text);
     });
 
     // Cache recipes for slash hint
@@ -1094,6 +1138,19 @@ function openSpotlight() {
     let tagIdx = -1;
     let tagAnchor = -1;
 
+    // Value autocomplete state
+    let valueMatches = [];
+    let valueIdx = -1;
+    let valueAnchor = -1;
+    const valueHintEl = document.getElementById('spotlight-values');
+
+    // Cache master values
+    let _cachedValues = null;
+    async function getValues() {
+        if (!_cachedValues) _cachedValues = await api('/api/master-values').catch(() => []);
+        return _cachedValues;
+    }
+
     // Parse #scope:tag and #tag tokens from text
     function parseInlineTags(text) {
         const matches = text.match(/#[a-zA-Z0-9_:-]+/g) || [];
@@ -1118,8 +1175,11 @@ function openSpotlight() {
     const slashBtn = document.querySelector('.spotlight-key[data-insert="/"]');
 
     async function confirmRecipeChoice(u) {
-        input.value = '/' + u + ' ';
+        const text = '/' + u + ' ';
+        input.textContent = text;
+        highlightInput();
         input.focus();
+        setCursorOffset(text.length);
         slashMatches = [];
         slashIdx = -1;
         recipesHint.style.display = 'none';
@@ -1156,23 +1216,51 @@ function openSpotlight() {
     }
 
     function confirmTagChoice(tag) {
-        const val = input.value;
+        const val = getText();
         const before = val.slice(0, tagAnchor);
-        const after = val.slice(input.selectionStart);
+        const after = val.slice(getCursorOffset());
         const fullTag = formatTagToken(tag);
-        input.value = before + fullTag + ' ' + after;
+        input.textContent = before + fullTag + ' ' + after;
         tagMatches = [];
         tagIdx = -1;
         tagHintEl.style.display = 'none';
+        highlightInput();
         input.focus();
-        const newPos = before.length + fullTag.length + 1;
-        input.setSelectionRange(newPos, newPos);
-        updateBackdrop();
+        setCursorOffset(before.length + fullTag.length + 1);
+    }
+
+    function renderValueHints() {
+        if (valueMatches.length === 0) {
+            valueHintEl.style.display = 'none';
+            return;
+        }
+        valueHintEl.style.display = 'block';
+        valueHintEl.innerHTML = valueMatches.slice(0, 8).map((v, i) => {
+            const outline = i === valueIdx ? ';outline:var(--focus);outline-offset:1px' : '';
+            return `<span class="badge" style="background:var(--mod-log-lt);color:var(--mod-log-dk)${outline};margin:var(--s-1);cursor:pointer" data-vi="${i}">${esc(v.k)} <span style="color:var(--ink-4);font-size:var(--fs-0)">${esc(v.d)}</span></span>`;
+        }).join(' ');
+        valueHintEl.querySelectorAll('[data-vi]').forEach(el => {
+            el.onclick = () => confirmValueChoice(valueMatches[parseInt(el.dataset.vi)]);
+        });
+    }
+
+    function confirmValueChoice(mv) {
+        const val = getText();
+        const before = val.slice(0, valueAnchor);
+        const after = val.slice(getCursorOffset());
+        const token = '@' + mv.k + '(';
+        input.textContent = before + token + after;
+        valueMatches = [];
+        valueIdx = -1;
+        valueHintEl.style.display = 'none';
+        highlightInput();
+        input.focus();
+        setCursorOffset(before.length + token.length);
     }
 
     input.oninput = async () => {
-        updateBackdrop();
-        const val = input.value;
+        highlightInput();
+        const val = getText();
         // Slash recipe detection
         if (val.startsWith('/') && !val.includes(' ')) {
             const recipes = await getRecipes();
@@ -1200,7 +1288,7 @@ function openSpotlight() {
                 const recipe = recipes.find(r => r.u === slashRecipeMatch[1]);
                 recipeScopes = (recipe && recipe.scopes) ? recipe.scopes.map(s => s.scope_name) : [];
             }
-            const pos = input.selectionStart;
+            const pos = getCursorOffset();
             const textBeforeCursor = val.slice(0, pos);
             const hashMatch = textBeforeCursor.match(/#([a-zA-Z0-9_:-]*)$/);
             if (hashMatch) {
@@ -1220,7 +1308,7 @@ function openSpotlight() {
 
                 // Exclude the current #fragment being typed from used tags
                 // Exclude the current #fragment being typed from used tags
-                const textWithoutCurrent = val.slice(0, tagAnchor) + val.slice(input.selectionStart);
+                const textWithoutCurrent = val.slice(0, tagAnchor) + val.slice(getCursorOffset());
                 const usedNames = parseInlineTags(textWithoutCurrent).map(u => { const c = u.indexOf(':'); return c >= 0 ? u.slice(c+1) : u; });
                 tagMatches = allTags.filter(t => {
                     if (usedNames.includes(t.t)) return false;
@@ -1250,16 +1338,59 @@ function openSpotlight() {
         tagMatches = [];
         tagIdx = -1;
         tagHintEl.style.display = 'none';
+
+        // Value detection: @key or @key( without closing )
+        const vPos = getCursorOffset();
+        const vBefore = val.slice(0, vPos);
+        const atMatch = vBefore.match(/@([a-zA-Z0-9_-]*)$/);
+        if (atMatch && !vBefore.match(/@[a-zA-Z0-9_-]*\([^)]*$/)) {
+            // Typing key name (no open paren yet)
+            valueAnchor = vPos - atMatch[0].length;
+            const typed = (atMatch[1] || '').toLowerCase();
+            const allValues = await getValues();
+            // Exclude already-used value keys
+            const usedKeys = (val.match(/@([a-zA-Z0-9_-]+)\(/g) || []).map(m => m.slice(1, -1));
+            valueMatches = allValues.filter(v =>
+                !usedKeys.includes(v.k) && v.k.toLowerCase().includes(typed)
+            );
+            valueIdx = -1;
+            renderValueHints();
+            return;
+        }
+        valueMatches = [];
+        valueIdx = -1;
+        valueHintEl.style.display = 'none';
     };
 
     input.onkeydown = async (e) => {
         if (e.key === 'Escape') {
+            if (valueMatches.length > 0) {
+                valueMatches = []; valueIdx = -1; valueHintEl.style.display = 'none';
+                return;
+            }
             if (tagMatches.length > 0) {
                 tagMatches = []; tagIdx = -1; tagHintEl.style.display = 'none';
                 return;
             }
             closeSpotlight();
             return;
+        }
+
+        // Value mode: Tab cycles, Enter confirms
+        if (valueMatches.length > 0) {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                if (valueMatches.length === 1) { confirmValueChoice(valueMatches[0]); return; }
+                valueIdx = (valueIdx + 1) % valueMatches.length;
+                renderValueHints();
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (valueMatches.length === 1) { confirmValueChoice(valueMatches[0]); return; }
+                if (valueIdx >= 0) { confirmValueChoice(valueMatches[valueIdx]); return; }
+                return;
+            }
         }
 
         // Tag mode: Tab cycles, Enter/Space confirms
@@ -1277,7 +1408,7 @@ function openSpotlight() {
                 if (tagIdx >= 0) { confirmTagChoice(tagMatches[tagIdx]); return; }
                 // Space with no selection: confirm exact match or first match
                 if (e.key === ' ') {
-                    const typed = input.value.slice(tagAnchor + 1, input.selectionStart).toLowerCase();
+                    const typed = getText().slice(tagAnchor + 1, getCursorOffset()).toLowerCase();
                     const exact = tagMatches.find(t => t.t.toLowerCase() === typed);
                     confirmTagChoice(exact || tagMatches[0]);
                 }
@@ -1310,7 +1441,7 @@ function openSpotlight() {
 
         if (e.key === 'Enter') {
             e.preventDefault();
-            const raw = input.value.trim();
+            const raw = getText().trim();
             if (!raw) return;
 
             // Block bare /recipe with no text
@@ -1319,8 +1450,12 @@ function openSpotlight() {
 
             // Parse inline #scope:tag and #tag tokens
             const hintTags = parseInlineTags(raw);
-            // Strip all #tokens from text
-            let cleanText = raw.replace(/#[a-zA-Z0-9_:-]+\s*/g, '').trim();
+            // Strip all #tokens from text, convert @key(value) to "key: value"
+            let cleanText = raw
+                .replace(/#[a-zA-Z0-9_:-]+\s*/g, '')
+                .replace(/@([a-zA-Z0-9_-]+)\(([^)]*)\)\s*/g, '$1: $2 ')
+                .replace(/@[a-zA-Z0-9_-]*\s*/g, '')
+                .trim();
 
             let payload = { text: cleanText, source: 'web' };
             if (slashMatch) {
@@ -1331,7 +1466,8 @@ function openSpotlight() {
                 payload.hint_tags = hintTags;
             }
 
-            input.disabled = true;
+            input.setAttribute('aria-disabled', 'true');
+            input.contentEditable = 'false';
             hint.textContent = slashMatch ? `Sending with /${slashMatch[1]}...` : 'Sending...';
             recipesHint.style.display = 'none';
             tagHintEl.style.display = 'none';
@@ -1348,12 +1484,14 @@ function openSpotlight() {
                 } else {
                     hint.textContent = 'Error: ' + (data.error || resp.statusText);
                     hint.style.color = 'var(--neg)';
-                    input.disabled = false;
+                    input.removeAttribute('aria-disabled');
+                    input.contentEditable = 'true';
                 }
             } catch (err) {
                 hint.textContent = 'Error: ' + err.message;
                 hint.style.color = 'var(--neg)';
-                input.disabled = false;
+                input.removeAttribute('aria-disabled');
+                input.contentEditable = 'true';
             }
         }
     };
@@ -1485,7 +1623,7 @@ function renderDraftContent(item, queueId) {
                 hint: t.scope_name ? t.scope_name + (t.d ? ' \u00b7 ' + t.d : '') : (t.d || '')
             }));
             tagInput = createTagInput(
-                document.getElementById('draft-done-tags'), tagSugs, result.tags || [],
+                document.getElementById('draft-done-tags'), tagSugs, (result.tags || []).map(bareTag),
                 { allowNew: true, placeholder: 'Add tags...' }
             );
 
@@ -1654,7 +1792,7 @@ function renderDraftContent(item, queueId) {
                 hint: t.scope_name ? t.scope_name + (t.d ? ' \u00b7 ' + t.d : '') : (t.d || '')
             }));
             tagInput = createTagInput(
-                document.getElementById('draft-tags-input'), tagSugs, partial.tags || [],
+                document.getElementById('draft-tags-input'), tagSugs, (partial.tags || []).map(bareTag),
                 { allowNew: true, placeholder: 'Add tags...' }
             );
 

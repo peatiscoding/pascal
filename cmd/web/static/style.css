@@ -343,30 +343,31 @@ tr.clickable { cursor: pointer; }
     background: var(--card); border: 1px solid var(--ink); border-radius: var(--r-2);
     overflow: hidden;
 }
-.spotlight-wrap {
-    position: relative;
-}
-.spotlight-backdrop {
-    position: absolute; inset: 0; overflow: hidden;
-    padding: var(--s-5) var(--s-6);
+.spotlight-editable {
+    width: 100%; min-height: 55px; padding: var(--s-5) var(--s-6);
+    border: none; border-bottom: 2px solid var(--signal);
     font-size: var(--fs-2); font-family: var(--font-mono);
+    background: var(--card); color: var(--ink); outline: none;
     white-space: pre-wrap; word-wrap: break-word;
-    color: transparent; pointer-events: none;
-    border-bottom: 2px solid transparent;
+    caret-color: var(--ink);
 }
-.spotlight-tag {
+.spotlight-editable:empty::before {
+    content: attr(data-placeholder);
+    color: var(--ink-4); pointer-events: none;
+}
+.spotlight-editable[aria-disabled="true"] { background: var(--paper); color: var(--ink-4); }
+.spotlight-editable .spotlight-tag {
     background: var(--mod-stat-lt); color: var(--mod-stat-dk);
     border-radius: var(--r-1); padding: 0 2px;
 }
-.spotlight-box textarea {
-    width: 100%; padding: var(--s-5) var(--s-6); border: none; border-bottom: 2px solid var(--signal);
-    font-size: var(--fs-2); font-family: var(--font-mono);
-    background: transparent; color: var(--ink); outline: none;
-    resize: none; overflow: hidden; min-height: 55px;
-    position: relative; z-index: 1;
-    caret-color: var(--ink);
+.spotlight-editable .spotlight-recipe {
+    background: var(--mod-act-lt); color: var(--mod-act-dk);
+    border-radius: var(--r-1); padding: 0 2px;
 }
-.spotlight-box textarea:disabled { background: var(--paper); color: var(--ink-4); }
+.spotlight-editable .spotlight-value {
+    background: var(--mod-log-lt); color: var(--mod-log-dk);
+    border-radius: var(--r-1); padding: 0 2px;
+}
 .spotlight-shortcuts {
     display: flex; gap: var(--s-3); padding: var(--s-3) var(--s-5);
     background: var(--card); border-bottom: 1px solid var(--rule);
