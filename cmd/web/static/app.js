@@ -1450,10 +1450,18 @@ function openSpotlight() {
 
             // Parse inline #scope:tag and #tag tokens
             const hintTags = parseInlineTags(raw);
-            // Strip all #tokens from text, convert @key(value) to "key: value"
+            // Parse inline @key(value) tokens
+            const hintValues = [];
+            const valueRe = /@([a-zA-Z0-9_-]+)\(([^)]+)\)/g;
+            let vm;
+            while ((vm = valueRe.exec(raw)) !== null) {
+                const v = parseFloat(vm[2]);
+                if (!isNaN(v)) hintValues.push({ k: vm[1], v });
+            }
+            // Strip #tokens and @tokens from text
             let cleanText = raw
                 .replace(/#[a-zA-Z0-9_:-]+\s*/g, '')
-                .replace(/@([a-zA-Z0-9_-]+)\(([^)]*)\)\s*/g, '$1: $2 ')
+                .replace(/@[a-zA-Z0-9_-]+\([^)]*\)\s*/g, '')
                 .replace(/@[a-zA-Z0-9_-]*\s*/g, '')
                 .trim();
 
@@ -1464,6 +1472,9 @@ function openSpotlight() {
             }
             if (hintTags.length > 0) {
                 payload.hint_tags = hintTags;
+            }
+            if (hintValues.length > 0) {
+                payload.hint_values = hintValues;
             }
 
             input.setAttribute('aria-disabled', 'true');

@@ -16,7 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const pollInterval = 500 * time.Millisecond
+const (
+	pollInterval       = 500 * time.Millisecond
+	summarizeThreshold = 250
+)
 
 type Worker struct {
 	queueDB *sql.DB
@@ -160,91 +163,157 @@ func (w *Worker) phaseExtract(item *db.QueueItem, recipeU string) {
 	recipe, err := db.GetRecipe(w.mainDB, recipeU)
 	if err != nil {
 		log.Printf("get recipe %s for item %d: %v", recipeU, item.ID, err)
-		// Recipe not found — extract without
 		w.extractNoRecipe(item)
 		return
 	}
 
+	// Parse hints from queue item
+	hintTags, hintValues := parseHints(item)
 	tags, _ := db.ListTagsWithScope(w.mainDB)
-	masterVals, _ := db.ListMasterValues(w.mainDB)
 
-	var ctx strings.Builder
-	fmt.Fprintf(&ctx, "Recipe: %s — %s (default status: %d)\n\n", recipe.Usecase, recipe.Description, recipe.DefaultStatus)
-
-	if len(recipe.Values) > 0 {
-		ctx.WriteString("Expected values:\n")
-		for _, v := range recipe.Values {
-			req := ""
-			if len(v.RequiredAt) > 0 {
-				req = " (REQUIRED)"
-			}
-			// Find description from master values
-			desc := v.MasterKey
-			for _, mv := range masterVals {
-				if mv.Key == v.MasterKey {
-					desc = fmt.Sprintf("%s (%s)", mv.Key, mv.Desc)
-					break
-				}
-			}
-			fmt.Fprintf(&ctx, "- %s%s\n", desc, req)
-		}
+	// Long text → always use LLM to summarize
+	if len(item.Payload) >= summarizeThreshold {
+		w.doSummarize(item, recipe, tags, hintTags, hintValues)
+		return
 	}
 
-	if len(recipe.Scopes) > 0 {
-		ctx.WriteString("\nRequired tag scopes (must pick a tag from each):\n")
-		for _, sc := range recipe.Scopes {
-			req := ""
-			if sc.Required {
-				req = " (REQUIRED)"
-			}
-			// List tags in this scope
-			var scopeTags []string
-			for _, t := range tags {
-				if t.ScopeName != nil && *t.ScopeName == sc.ScopeName {
-					scopeTags = append(scopeTags, t.FormatTagHash())
-				}
-			}
-			fmt.Fprintf(&ctx, "- %s%s", sc.ScopeName, req)
-			if len(scopeTags) > 0 {
-				fmt.Fprintf(&ctx, " — choices: %s", strings.Join(scopeTags, ", "))
-			}
-			ctx.WriteString("\n")
-		}
+	// Short text: check if all required tags+values are already provided
+	missing := findMissing(recipe, tags, hintTags, hintValues)
+	if len(missing) == 0 {
+		// Everything provided — direct create, no LLM
+		w.directCreate(item, recipe, hintTags, hintValues)
+		return
 	}
 
-	w.doExtract(item, ctx.String(), tags, recipe)
+	// Short text with missing fields — LLM extracts only what's missing
+	w.doPartialExtract(item, recipe, tags, hintTags, hintValues, missing)
 }
 
 func (w *Worker) extractNoRecipe(item *db.QueueItem) {
+	hintTags, hintValues := parseHints(item)
 	tags, _ := db.ListTagsWithScope(w.mainDB)
-	w.doExtract(item, "", tags, nil)
+
+	if len(item.Payload) >= summarizeThreshold {
+		w.doSummarize(item, nil, tags, hintTags, hintValues)
+		return
+	}
+
+	// No recipe = no required fields to check, but still need title extraction if ambiguous
+	// For short text without recipe, use text as title directly
+	w.directCreate(item, nil, hintTags, hintValues)
 }
 
-func (w *Worker) doExtract(item *db.QueueItem, recipeCtx string, tags []db.TagWithScope, recipe *db.RecipeFull) {
-	// Parse hint tags from queue item
+// parseHints extracts hint tags and values from queue item JSON columns.
+func parseHints(item *db.QueueItem) ([]string, []db.RecordValue) {
 	var hintTags []string
 	if item.HintTags != nil {
 		json.Unmarshal([]byte(*item.HintTags), &hintTags)
 	}
-
-	var promptCtx strings.Builder
-	if recipeCtx != "" {
-		promptCtx.WriteString(recipeCtx)
-		promptCtx.WriteString("\n")
+	var hintValues []db.RecordValue
+	if item.HintValues != nil {
+		json.Unmarshal([]byte(*item.HintValues), &hintValues)
 	}
-	if len(tags) > 0 {
-		tagStrs := make([]string, len(tags))
-		for i, t := range tags {
+	return hintTags, hintValues
+}
+
+// findMissing checks recipe requirements against provided hints.
+// Returns list of missing field descriptions.
+func findMissing(recipe *db.RecipeFull, allTags []db.TagWithScope, hintTags []string, hintValues []db.RecordValue) []string {
+	if recipe == nil {
+		return nil
+	}
+
+	targetSt := recipe.DefaultStatus
+	var missing []string
+
+	// Check required values
+	for _, rv := range recipe.Values {
+		if !statusIn(rv.RequiredAt, targetSt) {
+			continue
+		}
+		found := false
+		for _, hv := range hintValues {
+			if hv.Key == rv.MasterKey {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, rv.MasterKey)
+		}
+	}
+
+	// Check required scopes — hint tags may be "scope:tag" or bare "tag"
+	hintTagBare := make(map[string]bool)
+	hintTagScoped := make(map[string]string) // scope → tag
+	for _, ht := range hintTags {
+		bare := bareTagName(ht)
+		hintTagBare[bare] = true
+		if idx := strings.LastIndex(ht, ":"); idx >= 0 {
+			hintTagScoped[ht[:idx]] = bare
+		} else {
+			// Try to resolve scope from allTags
+			for _, t := range allTags {
+				if t.Name == bare && t.ScopeName != nil {
+					hintTagScoped[*t.ScopeName] = bare
+				}
+			}
+		}
+	}
+
+	for _, sc := range recipe.Scopes {
+		if !sc.Required {
+			continue
+		}
+		if _, ok := hintTagScoped[sc.ScopeName]; !ok {
+			missing = append(missing, "tag:"+sc.ScopeName)
+		}
+	}
+
+	return missing
+}
+
+// directCreate writes a record without calling LLM.
+// Title = cleaned payload text, tags/values from hints.
+func (w *Worker) directCreate(item *db.QueueItem, recipe *db.RecipeFull, hintTags []string, hintValues []db.RecordValue) {
+	st := 3 // default done
+	if recipe != nil {
+		st = recipe.DefaultStatus
+	}
+
+	// Normalize tags to bare names for storage
+	bareTags := make([]string, len(hintTags))
+	for i, t := range hintTags {
+		bareTags[i] = bareTagName(t)
+	}
+
+	result := extractResult{
+		Title:  item.Payload,
+		Status: st,
+		Tags:   bareTags,
+		Values: hintValues,
+	}
+
+	var recipeU *string
+	if recipe != nil {
+		recipeU = &recipe.Usecase
+	}
+
+	w.createRecord(item, result, recipeU)
+}
+
+// doSummarize calls LLM to summarize long text. Title = summary, detail = original.
+func (w *Worker) doSummarize(item *db.QueueItem, recipe *db.RecipeFull, allTags []db.TagWithScope, hintTags []string, hintValues []db.RecordValue) {
+	var ctx strings.Builder
+	if recipe != nil {
+		fmt.Fprintf(&ctx, "Recipe: %s — %s\n", recipe.Usecase, recipe.Description)
+	}
+	if len(allTags) > 0 {
+		tagStrs := make([]string, len(allTags))
+		for i, t := range allTags {
 			tagStrs[i] = t.FormatTagHash()
 		}
-		fmt.Fprintf(&promptCtx, "Available tags: %s\n", strings.Join(tagStrs, ", "))
-	}
-	if len(hintTags) > 0 {
-		hintStrs := make([]string, len(hintTags))
-		for i, t := range hintTags {
-			hintStrs[i] = "#" + t
-		}
-		fmt.Fprintf(&promptCtx, "User has already selected: %s. Always include these tags in your response.\n", strings.Join(hintStrs, ", "))
+		fmt.Fprintf(&ctx, "Available tags: %s\n", strings.Join(tagStrs, ", "))
 	}
 
 	statusHint := "Default 3 for completed actions, 1 for future tasks."
@@ -252,33 +321,117 @@ func (w *Worker) doExtract(item *db.QueueItem, recipeCtx string, tags []db.TagWi
 		statusHint = fmt.Sprintf("Use %d (recipe default) unless text clearly indicates otherwise.", recipe.DefaultStatus)
 	}
 
-	prompt := fmt.Sprintf(`You are a data extraction assistant. Extract structured data from the user text below.
+	prompt := fmt.Sprintf(`You are a data extraction assistant. The following text is long and needs summarization.
+
 %s
 Return JSON only with these fields:
-- tl (string): title/summary
-- dt (string, optional): detail
+- tl (string): short title/summary (max 80 chars)
 - st (int): status 0=paused, 1=todo, 2=doing, 3=done. %s
-- tags (string[]): tag names ONLY — no # prefix, no scope prefix. For example if the tag is listed as #payment-source:cash, return just "cash". Include tags from required scopes.
+- tags (string[]): tag names ONLY — no # prefix, no scope prefix
 - values (object[]): each with "k" (value type key) and "v" (number)
-- missing (string[]): list any REQUIRED fields you could not find in the text
+- missing (string[]): list any REQUIRED fields you could not find
 
-User text: %s`, promptCtx.String(), statusHint, item.Payload)
+User text: %s`, ctx.String(), statusHint, item.Payload)
 
 	resp, err := w.ollama.Generate(prompt)
 	if err != nil {
-		log.Printf("ollama extract error for item %d: %v", item.ID, err)
+		log.Printf("ollama summarize error for item %d: %v", item.ID, err)
 		db.MarkFailed(w.queueDB, item.ID, err.Error())
 		return
 	}
 
 	var result extractResult
 	if err := json.Unmarshal([]byte(resp), &result); err != nil {
-		log.Printf("parse extract response for item %d: %v (raw: %s)", item.ID, err, resp)
+		log.Printf("parse summarize response for item %d: %v (raw: %s)", item.ID, err, resp)
 		db.MarkFailed(w.queueDB, item.ID, fmt.Sprintf("parse: %v", err))
 		return
 	}
 
-	// Strip any scope prefix (e.g. "payment-source:cash" → "cash") and # prefix from tags
+	// Set original text as detail
+	detail := item.Payload
+	result.Detail = &detail
+
+	// Merge hints
+	result.Tags = mergeTags(result.Tags, hintTags)
+	result.Values = mergeValues(result.Values, hintValues)
+
+	w.finalize(item, recipe, result, allTags)
+}
+
+// doPartialExtract calls LLM only to fill in missing tags/values.
+func (w *Worker) doPartialExtract(item *db.QueueItem, recipe *db.RecipeFull, allTags []db.TagWithScope, hintTags []string, hintValues []db.RecordValue, missing []string) {
+	masterVals, _ := db.ListMasterValues(w.mainDB)
+
+	var ctx strings.Builder
+	fmt.Fprintf(&ctx, "Recipe: %s — %s\n\n", recipe.Usecase, recipe.Description)
+
+	// Only describe missing fields
+	ctx.WriteString("Extract ONLY the following missing fields from the text:\n")
+	for _, m := range missing {
+		if strings.HasPrefix(m, "tag:") {
+			scopeName := strings.TrimPrefix(m, "tag:")
+			var scopeTags []string
+			for _, t := range allTags {
+				if t.ScopeName != nil && *t.ScopeName == scopeName {
+					scopeTags = append(scopeTags, t.Name)
+				}
+			}
+			fmt.Fprintf(&ctx, "- Tag from scope '%s' — choices: %s\n", scopeName, strings.Join(scopeTags, ", "))
+		} else {
+			desc := m
+			for _, mv := range masterVals {
+				if mv.Key == m {
+					desc = fmt.Sprintf("%s (%s)", mv.Key, mv.Desc)
+					break
+				}
+			}
+			fmt.Fprintf(&ctx, "- Value: %s (number)\n", desc)
+		}
+	}
+
+	prompt := fmt.Sprintf(`You are a data extraction assistant. Extract ONLY the specifically requested fields.
+
+%s
+Return JSON only with these fields:
+- tags (string[]): tag names ONLY for the requested scopes — no # prefix, no scope prefix
+- values (object[]): each with "k" (value type key) and "v" (number) — only for requested values
+- missing (string[]): list any requested fields you could NOT find in the text
+
+User text: %s`, ctx.String(), item.Payload)
+
+	resp, err := w.ollama.Generate(prompt)
+	if err != nil {
+		log.Printf("ollama partial-extract error for item %d: %v", item.ID, err)
+		db.MarkFailed(w.queueDB, item.ID, err.Error())
+		return
+	}
+
+	var llmResult extractResult
+	if err := json.Unmarshal([]byte(resp), &llmResult); err != nil {
+		log.Printf("parse partial-extract response for item %d: %v (raw: %s)", item.ID, err, resp)
+		db.MarkFailed(w.queueDB, item.ID, fmt.Sprintf("parse: %v", err))
+		return
+	}
+
+	// Build full result: title from payload, merge all sources
+	st := recipe.DefaultStatus
+	allResultTags := mergeTags(llmResult.Tags, hintTags)
+	allResultValues := mergeValues(llmResult.Values, hintValues)
+
+	result := extractResult{
+		Title:   item.Payload,
+		Status:  st,
+		Tags:    allResultTags,
+		Values:  allResultValues,
+		Missing: llmResult.Missing,
+	}
+
+	w.finalize(item, recipe, result, allTags)
+}
+
+// finalize checks for missing fields and either creates the record or marks needs_input.
+func (w *Worker) finalize(item *db.QueueItem, recipe *db.RecipeFull, result extractResult, _ []db.TagWithScope) {
+	// Strip scope prefixes from tags
 	for i, t := range result.Tags {
 		t = strings.TrimPrefix(t, "#")
 		if idx := strings.LastIndex(t, ":"); idx >= 0 {
@@ -287,31 +440,9 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 		result.Tags[i] = t
 	}
 
-	// Merge hint tags into result (deduplicated by tag name).
-	// Hint tags may carry scope:tag format — prefer hint version over Ollama's plain name.
-	if len(hintTags) > 0 {
-		hintMap := make(map[string]string) // tagName → full hint string
-		for _, h := range hintTags {
-			hintMap[bareTagName(h)] = h
-		}
-		// Replace matching result tags with hint version (preserves scope info)
-		for i, t := range result.Tags {
-			if h, ok := hintMap[t]; ok {
-				result.Tags[i] = h
-				delete(hintMap, t)
-			}
-		}
-		// Append remaining hints
-		for _, h := range hintMap {
-			result.Tags = append(result.Tags, h)
-		}
-	}
-
-	// Check for missing required fields
 	hasMissing := len(result.Missing) > 0
 
-	// Also check recipe required fields if we have a recipe
-	// Check against recipe's default status
+	// Check recipe required fields
 	if recipe != nil && !hasMissing {
 		targetSt := recipe.DefaultStatus
 		if result.Status > 0 {
@@ -336,7 +467,6 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 	}
 
 	if hasMissing || result.Title == "" {
-		// Needs user input
 		niResult := needsInputResult{
 			Partial: result,
 			Missing: result.Missing,
@@ -350,7 +480,16 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 		return
 	}
 
-	// All good — create the record
+	var recipeU *string
+	if recipe != nil {
+		recipeU = &recipe.Usecase
+	}
+
+	w.createRecord(item, result, recipeU)
+}
+
+// createRecord inserts a record into the main DB and marks the queue item done.
+func (w *Worker) createRecord(item *db.QueueItem, result extractResult, recipeU *string) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		log.Printf("uuid error for item %d: %v", item.ID, err)
@@ -358,11 +497,6 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 		return
 	}
 	idBytes, _ := id.MarshalBinary()
-
-	var recipeU *string
-	if recipe != nil {
-		recipeU = &recipe.Usecase
-	}
 
 	record := &db.RecordFull{
 		Record: db.Record{
@@ -382,7 +516,6 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 		return
 	}
 
-	// Store result for draft UI display — include record ID for editing
 	result.RecordID = fmt.Sprintf("%x", record.ID)
 	resultJSON, _ := json.Marshal(result)
 	if err := db.SetQueueResult(w.queueDB, item.ID, "done", string(resultJSON)); err != nil {
@@ -397,7 +530,53 @@ User text: %s`, promptCtx.String(), statusHint, item.Payload)
 	log.Printf("processed item %d -> record %x", item.ID, record.ID)
 }
 
-// bareTagName extracts tag name from optional scope:tag format.
+// --- Helpers ---
+
+// mergeTags combines LLM-extracted tags with hint tags, deduplicating by bare name.
+func mergeTags(llmTags []string, hintTags []string) []string {
+	if len(hintTags) == 0 {
+		return llmTags
+	}
+	hintMap := make(map[string]string) // bareName → full hint string
+	for _, h := range hintTags {
+		hintMap[bareTagName(h)] = h
+	}
+	// Replace matching LLM tags with hint version
+	for i, t := range llmTags {
+		bare := bareTagName(strings.TrimPrefix(t, "#"))
+		if h, ok := hintMap[bare]; ok {
+			llmTags[i] = h
+			delete(hintMap, bare)
+		}
+	}
+	// Append remaining hints
+	for _, h := range hintMap {
+		llmTags = append(llmTags, h)
+	}
+	return llmTags
+}
+
+// mergeValues combines LLM-extracted values with hint values, hint wins on conflict.
+func mergeValues(llmValues []db.RecordValue, hintValues []db.RecordValue) []db.RecordValue {
+	if len(hintValues) == 0 {
+		return llmValues
+	}
+	hintMap := make(map[string]db.RecordValue)
+	for _, hv := range hintValues {
+		hintMap[hv.Key] = hv
+	}
+	for i, v := range llmValues {
+		if hv, ok := hintMap[v.Key]; ok {
+			llmValues[i] = hv
+			delete(hintMap, v.Key)
+		}
+	}
+	for _, hv := range hintMap {
+		llmValues = append(llmValues, hv)
+	}
+	return llmValues
+}
+
 func bareTagName(t string) string {
 	if idx := strings.LastIndex(t, ":"); idx >= 0 {
 		return t[idx+1:]

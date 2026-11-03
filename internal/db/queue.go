@@ -11,6 +11,7 @@ type QueueItem struct {
 	Source      string  `json:"source"`
 	RecipeU     *string `json:"recipe_u,omitempty"`
 	HintTags    *string `json:"hint_tags,omitempty"`
+	HintValues  *string `json:"hint_values,omitempty"`
 	Result      *string `json:"result,omitempty"`
 	Status      string  `json:"status"`
 	Attempts    int     `json:"attempts"`
@@ -22,16 +23,16 @@ type QueueItem struct {
 func GetQueueItem(db *sql.DB, id int) (*QueueItem, error) {
 	item := &QueueItem{}
 	err := db.QueryRow(
-		`SELECT id, payload, source, recipe_u, hint_tags, result, status, attempts, error, created_at, processed_at
+		`SELECT id, payload, source, recipe_u, hint_tags, hint_values, result, status, attempts, error, created_at, processed_at
 		 FROM ingest_queue WHERE id=?`, id,
-	).Scan(&item.ID, &item.Payload, &item.Source, &item.RecipeU, &item.HintTags, &item.Result, &item.Status, &item.Attempts, &item.Error, &item.CreatedAt, &item.ProcessedAt)
+	).Scan(&item.ID, &item.Payload, &item.Source, &item.RecipeU, &item.HintTags, &item.HintValues, &item.Result, &item.Status, &item.Attempts, &item.Error, &item.CreatedAt, &item.ProcessedAt)
 	if err != nil {
 		return nil, err
 	}
 	return item, nil
 }
 
-func Enqueue(db *sql.DB, payload, source string, recipeU *string, hintTags *string) (int64, error) {
+func Enqueue(db *sql.DB, payload, source string, recipeU *string, hintTags *string, hintValues *string) (int64, error) {
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ingest_queue WHERE status='pending'`).Scan(&count); err != nil {
 		return 0, err
@@ -41,8 +42,8 @@ func Enqueue(db *sql.DB, payload, source string, recipeU *string, hintTags *stri
 	}
 
 	res, err := db.Exec(
-		`INSERT INTO ingest_queue (payload, source, recipe_u, hint_tags) VALUES (?, ?, ?, ?)`,
-		payload, source, recipeU, hintTags,
+		`INSERT INTO ingest_queue (payload, source, recipe_u, hint_tags, hint_values) VALUES (?, ?, ?, ?, ?)`,
+		payload, source, recipeU, hintTags, hintValues,
 	)
 	if err != nil {
 		return 0, err
@@ -59,12 +60,12 @@ func DequeueNext(db *sql.DB) (*QueueItem, error) {
 
 	item := &QueueItem{}
 	err = tx.QueryRow(
-		`SELECT id, payload, source, recipe_u, hint_tags, result, status, attempts, error, created_at
+		`SELECT id, payload, source, recipe_u, hint_tags, hint_values, result, status, attempts, error, created_at
 		 FROM ingest_queue
 		 WHERE status='pending'
 		 ORDER BY created_at
 		 LIMIT 1`,
-	).Scan(&item.ID, &item.Payload, &item.Source, &item.RecipeU, &item.HintTags, &item.Result, &item.Status, &item.Attempts, &item.Error, &item.CreatedAt)
+	).Scan(&item.ID, &item.Payload, &item.Source, &item.RecipeU, &item.HintTags, &item.HintValues, &item.Result, &item.Status, &item.Attempts, &item.Error, &item.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

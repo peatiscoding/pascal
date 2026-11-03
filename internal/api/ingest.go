@@ -10,11 +10,17 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+type hintValue struct {
+	Key   string  `json:"k"`
+	Value float64 `json:"v"`
+}
+
 type ingestRequest struct {
-	Text     string   `json:"text"`
-	Source   string   `json:"source"`
-	RecipeU  *string  `json:"recipe_u,omitempty"`
-	HintTags []string `json:"hint_tags,omitempty"`
+	Text       string      `json:"text"`
+	Source     string      `json:"source"`
+	RecipeU    *string     `json:"recipe_u,omitempty"`
+	HintTags   []string    `json:"hint_tags,omitempty"`
+	HintValues []hintValue `json:"hint_values,omitempty"`
 }
 
 type ingestResponse struct {
@@ -44,7 +50,14 @@ func (s *Server) ingestText(w http.ResponseWriter, r *http.Request) {
 		hintTagsJSON = &ht
 	}
 
-	queueID, err := db.Enqueue(s.queueDB, req.Text, req.Source, req.RecipeU, hintTagsJSON)
+	var hintValuesJSON *string
+	if len(req.HintValues) > 0 {
+		b, _ := json.Marshal(req.HintValues)
+		hv := string(b)
+		hintValuesJSON = &hv
+	}
+
+	queueID, err := db.Enqueue(s.queueDB, req.Text, req.Source, req.RecipeU, hintTagsJSON, hintValuesJSON)
 	if err != nil {
 		if err.Error() == "queue full" {
 			http.Error(w, "queue full", http.StatusTooManyRequests)
