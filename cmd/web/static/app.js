@@ -1023,10 +1023,11 @@ function openSpotlight() {
                 <textarea id="spotlight-input" rows="3" placeholder="Log something... /expense Lunch 200 THB" autocomplete="off"></textarea>
             </div>
             <div id="spotlight-shortcuts" class="spotlight-shortcuts">
+                <button type="button" class="spotlight-key" data-key="Escape">esc</button>
+                <span style="flex:1"></span>
                 <button type="button" class="spotlight-key" data-insert="/">/</button>
                 <button type="button" class="spotlight-key" data-insert="#">#</button>
                 <button type="button" class="spotlight-key" data-key="Enter">\u21B5</button>
-                <button type="button" class="spotlight-key" data-key="Escape">esc</button>
             </div>
             <div id="spotlight-hint" class="spotlight-hint">/recipe \u00b7 #tag \u00b7 \u21B5 send \u00b7 esc close</div>
             <div id="spotlight-recipes" class="spotlight-hint" style="display:none"></div>
