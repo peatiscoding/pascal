@@ -1,0 +1,16 @@
+[ ] Tag UI doesn't seems to match the tag pre-selected in Draft Screen
+[ ] Draft screen seems unncessary
+[ ] Add new button should be down at the lower right corner or may be pull to add? some better gesture for adding is required.
+[ ] Input screen - Tag overlay misplaced causing a very bad UI output
+[ ] Should we just drop the text processing
+[ ] Enhance LLM to extract views + Tags instead of interpret?
+[ ] Where was the "description" field in the Draft screen?
+[ ] Input screen - Dock buttons to the top of Keyboard? If desktop stick it where it was
+[ ] Allowing adding multiple records in one request?
+[ ] Draft Screen value is extruded off screen
+[ ] The Table of Editing extruded off screen
+[ ] Clicking Tag to filter? (Filter by Tags? e.g. shopping project can be used both /todo and /expense hence the view can be combined)
+[ ] Hide Done items with timeout? - Configurable Screen's metadata
+[ ] Track the Time for Task to be completed
+[ ] Graph the Time for Task to complete
+[ ] Value can be explicitly annotated
