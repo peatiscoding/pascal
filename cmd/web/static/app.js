@@ -3,6 +3,11 @@ const BOT_URL = window.PASCAL_BOT_URL || '';
 const app = document.getElementById('app');
 let logSource = null;
 
+function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+}
+
 const STATUS_LABELS = ['Paused', 'Todo', 'Doing', 'Done'];
 function statusLabel(st) { return `<span class="badge badge-st-${st}">${STATUS_LABELS[st] || st}</span>`; }
 function b64ToHex(b64) { return [...atob(b64)].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(''); }
@@ -349,6 +354,12 @@ function showRecordDetail(r) {
         if (e.target === overlay) closeRecordDetail();
     });
     document.body.appendChild(overlay);
+
+    // Auto-resize textareas
+    overlay.querySelectorAll('textarea').forEach(ta => {
+        ta.addEventListener('input', () => autoResize(ta));
+        autoResize(ta);
+    });
 
     // Wire up status button bar
     document.getElementById('rd-st').addEventListener('click', (e) => {
@@ -1039,6 +1050,7 @@ function openSpotlight() {
         );
     }
     input.addEventListener('scroll', () => { backdrop.scrollTop = input.scrollTop; });
+    input.addEventListener('input', () => { autoResize(input); backdrop.style.height = input.style.height; });
 
     // Shortcut key buttons
     document.querySelectorAll('.spotlight-key').forEach(btn => {
@@ -1459,6 +1471,11 @@ function renderDraftContent(item, queueId) {
             </div>
         `;
 
+        el.querySelectorAll('textarea').forEach(ta => {
+            ta.addEventListener('input', () => autoResize(ta));
+            autoResize(ta);
+        });
+
         let tagInput;
         const valueRows = [];
         fetchMasterData().then(master => {
@@ -1623,6 +1640,11 @@ function renderDraftContent(item, queueId) {
         `;
 
         // Wire up autocomplete components after master data loads
+        el.querySelectorAll('textarea').forEach(ta => {
+            ta.addEventListener('input', () => autoResize(ta));
+            autoResize(ta);
+        });
+
         let tagInput;
         const valueRows = [];
         fetchMasterData().then(master => {
