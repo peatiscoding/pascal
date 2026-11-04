@@ -12,6 +12,7 @@ PASCAL (Personal Assistant for Statistics, Context, Actions & Logging) — local
 - **Discord Bot** (`cmd/bot`) — Separate Go binary, calls server API over HTTP
 - **Two SQLite files:** `runtime/pascal.db` (permanent data), `runtime/queue.db` (ephemeral ingestion queue)
 - **Three ingestion paths:** Structured (direct DB write), Generic Webhooks (pattern/field_map/Ollama), Google Calendar sync (push notifications)
+- **Queue worker** uses 3 LLM paths: direct-create (no LLM, short text + complete hints), partial-extract (LLM for missing fields only), summarize (LLM for long text ≥250 chars)
 - **MCP Server** (`cmd/mcp`) — stdio JSON-RPC server for Claude Code integration, calls API server over HTTP
 - **Frontend:** Pure HTML/JS/CSS, no frameworks, served via `go:embed`
 

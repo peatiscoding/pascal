@@ -14,26 +14,19 @@ const STATUS_LABELS = ['Paused', 'Todo', 'Doing', 'Done'];
 function statusLabel(st) { return `<span class="badge badge-st-${st}">${STATUS_LABELS[st] || st}</span>`; }
 function b64ToHex(b64) { return [...atob(b64)].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(''); }
 
-// --- Mobile nav ---
-{
-    const menuBtn = document.getElementById('nav-menu-btn');
-    const mobileNav = document.getElementById('mobile-nav');
-    if (menuBtn && mobileNav) {
-        menuBtn.onclick = () => mobileNav.classList.toggle('open');
-        mobileNav.querySelectorAll('a').forEach(a => {
-            a.addEventListener('click', () => mobileNav.classList.remove('open'));
-        });
-    }
-}
-
 // --- Router ---
 
 function route() {
     if (logSource) { logSource.close(); logSource = null; }
     const hash = location.hash || '#dashboard';
+    // Desktop header nav
     document.querySelectorAll('cds-header-nav-item.nav-link').forEach(a => {
         const isActive = hash.startsWith(a.getAttribute('href'));
         a.toggleAttribute('active', isActive);
+    });
+    // Mobile bottom nav
+    document.querySelectorAll('.mobile-nav-link[href]').forEach(a => {
+        a.classList.toggle('active', hash.startsWith(a.getAttribute('href')));
     });
 
     if (hash === '#dashboard') return renderDashboard();

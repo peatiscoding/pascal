@@ -30,7 +30,9 @@ flowchart TB
         subgraph Worker["Queue Worker (goroutine)"]
             Poll[Poll 500ms]
             RecipeMatch[Recipe Match\nvia Ollama]
-            FieldExtract[Field Extract\nvia Ollama]
+            DirectCreate[Direct Create\nno LLM]
+            PartialExtract[Partial Extract\nvia Ollama]
+            Summarize[Summarize\nvia Ollama]
         end
 
         DirectWrite[Direct Write]
@@ -63,13 +65,19 @@ flowchart TB
     QueueDB --> Poll
     Poll -->|no recipe_u| RecipeMatch
     RecipeMatch --> Ollama
-    Poll -->|has recipe_u| FieldExtract
-    FieldExtract --> Ollama
+    Poll -->|"short + complete hints"| DirectCreate
+    Poll -->|"short + missing fields"| PartialExtract
+    Poll -->|"long text ≥250"| Summarize
+    PartialExtract --> Ollama
+    Summarize --> Ollama
 
     %% Worker push updates via WebSocket
-    RecipeMatch -->|"ambiguous/needs_input"| WSHub
-    FieldExtract -->|"needs_input/done"| WSHub
-    FieldExtract -->|complete| DirectWrite
+    RecipeMatch -->|"ambiguous"| WSHub
+    PartialExtract -->|"needs_input/done"| WSHub
+    Summarize -->|"needs_input/done"| WSHub
+    DirectCreate -->|complete| DirectWrite
+    PartialExtract -->|complete| DirectWrite
+    Summarize -->|complete| DirectWrite
 
     WSHub -->|queue update events| WSClient
     WSClient --> ThreadMap
@@ -332,6 +340,8 @@ CREATE TABLE ingest_queue (
     payload TEXT NOT NULL,
     source TEXT NOT NULL,              -- 'discord', 'webhook:cc_kbank', 'api', etc.
     recipe_u TEXT,                     -- resolved recipe (NULL = needs matching, set = skip to extract)
+    hint_tags TEXT,                    -- JSON string[]: pre-selected tags from caller (e.g. ["payment-source:cash"])
+    hint_values TEXT,                  -- JSON object[]: pre-selected values from caller (e.g. [{"k":"THB","v":200}])
     result TEXT,                       -- JSON: worker output (extracted fields, matched recipes, error detail)
     status TEXT NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
@@ -349,42 +359,71 @@ CREATE INDEX idx_queue_status ON ingest_queue(status, created_at);
 
 ```json
 {
-    "text": "Lunch for 200 THB using prompt pay",
+    "text": "Lunch at MK",
     "source": "discord",
-    "recipe_u": null
+    "recipe_u": "expense",
+    "hint_tags": ["payment-source:cash"],
+    "hint_values": [{"k": "THB", "v": 200}]
 }
 ```
 
 - `recipe_u` optional. If set, worker skips recipe matching and goes straight to extraction.
+- `hint_tags` optional. Pre-selected tags from frontend (e.g. `#scope:tag` tokens). Merged into result, guaranteed to survive LLM extraction.
+- `hint_values` optional. Pre-selected values from frontend (e.g. `@THB(200)` tokens). Merged into result, override LLM-extracted values on key conflict.
 - Returns `202` with `{"queue_id": 42}`.
 - Caller (e.g. bot) uses `queue_id` to track progress via WebSocket.
 
 ### Worker Logic
 
-Single goroutine, polls every 500ms.
+Single goroutine, polls every 500ms. Three processing paths based on text length and completeness of provided hints.
+
+**Threshold:** 250 characters.
 
 ```
 pick next pending item from queue
 
 if recipe_u is NULL:
     → match text against all recipes via Ollama
-    → 0 matches: mark failed, push WS event {type: "queue:no_match", id}
-    → 1 match:  set recipe_u on item, fall through to extract
+    → 0 matches: extract without recipe context (see below)
+    → 1 match:  set recipe_u, fall through to extract
     → N matches: set status "ambiguous", store matches in result,
                  push WS event {type: "queue:ambiguous", id, matches}
-                 (wait for caller to re-queue with chosen recipe_u)
 
-if recipe_u is set:
-    → extract fields via Ollama with full recipe context
-      (recipe description, required values/scopes, available tags/scopes/master_values)
-    → all required fields present:
-        create record via direct write, mark done,
-        push WS event {type: "queue:done", id, record}
-    → missing required fields:
-        set status "needs_input", store partial extraction in result,
-        push WS event {type: "queue:needs_input", id, missing, partial}
-        (wait for caller to re-queue with combined text + recipe_u)
+if recipe_u is set (or resolved from match):
+
+    PATH A — Direct Create (no LLM):
+        condition: text < 250 chars AND all required scoped tags provided
+                   AND all required values provided via hint_values
+        action:    title = input text, status = recipe default,
+                   tags/values from hints → insert record immediately
+        use case:  "/expense Lunch @THB(200) #payment-source:cash"
+
+    PATH B — Partial Extract (targeted LLM):
+        condition: text < 250 chars AND some required tags/values missing
+        action:    LLM prompted to extract ONLY the missing fields
+                   (not title, not status — those come from text/recipe)
+                   result merged with hints → finalize
+        use case:  "/expense Lunch @THB(200)" (missing payment-source tag)
+
+    PATH C — Summarize (full LLM):
+        condition: text >= 250 chars
+        action:    LLM summarizes text → title (max 80 chars),
+                   original text → detail field,
+                   also extracts tags/values/status
+                   result merged with hints → finalize
+        use case:  long-form notes, meeting summaries, pasted content
+
+No recipe_u + short text: direct create (title = text, status = done)
+No recipe_u + long text:  summarize via LLM (same as PATH C)
 ```
+
+### Finalize Step
+
+All three paths converge on finalize:
+1. Strip scope prefixes from tags (`payment-source:cash` → `cash`)
+2. Check recipe required fields against final result
+3. If complete → create record, mark done, WS broadcast
+4. If still missing → set `needs_input`, WS broadcast, wait for user
 
 ### Queue Statuses
 
@@ -419,7 +458,9 @@ Worker pushes queue status updates through the existing WebSocket hub. Events:
 
 ### Ollama Prompt Strategy
 
-**Recipe matching** (no `recipe_u`):
+Three prompt types, used depending on the processing path.
+
+**1. Recipe matching** (no `recipe_u`):
 ```
 You are a classifier. Given user text and available recipes, return which recipe(s) match.
 
@@ -434,24 +475,81 @@ Return empty matches if none fit.
 User text: {payload}
 ```
 
-**Field extraction** (with `recipe_u`):
+**2. Summarize** (PATH C — long text ≥250 chars):
 ```
-Extract structured data from user text using the recipe context below.
+You are a data extraction assistant. The following text is long and needs summarization.
 
 Recipe: track_spending — Track daily expenses with amount and payment method
+Available tags: #payment-source:cash, #payment-source:card, ...
 
-Expected values:
-- THB (REQUIRED)
-- payment_method
-
-Available tags: food, transport, entertainment, ...
-Available scopes: Personal, Personal|Finance, Work, ...
-
-Return JSON with fields: tl, dt, st, sc, tags, values, missing
-"missing" = list of REQUIRED fields not found in the text.
+Return JSON only with these fields:
+- tl (string): short title/summary (max 80 chars)
+- st (int): status 0=paused, 1=todo, 2=doing, 3=done
+- tags (string[]): tag names ONLY — no # prefix, no scope prefix
+- values (object[]): each with "k" (value type key) and "v" (number)
+- missing (string[]): list any REQUIRED fields you could not find
 
 User text: {payload}
 ```
+
+Original text is stored as `record.dt` (detail). LLM output provides title + structured fields.
+Hint tags/values are merged into the LLM result after extraction.
+
+**3. Partial extract** (PATH B — short text, missing fields only):
+```
+You are a data extraction assistant. Extract ONLY the specifically requested fields.
+
+Recipe: track_spending — Track daily expenses with amount and payment method
+
+Extract ONLY the following missing fields from the text:
+- Tag from scope 'payment-source' — choices: cash, card, prompt-pay
+- Value: THB (Thai Baht amount) (number)
+
+Return JSON only with these fields:
+- tags (string[]): tag names ONLY for the requested scopes
+- values (object[]): each with "k" and "v" — only for requested values
+- missing (string[]): list any requested fields you could NOT find
+
+User text: {payload}
+```
+
+This prompt is narrowly scoped — it does NOT ask for title, detail, or status (those come from the input text and recipe defaults). Only the specific missing tags/values are requested.
+
+**PATH A** (direct create) does not call Ollama at all.
+
+## Web UI Spotlight — Inline Syntax
+
+The spotlight input (keyboard shortcut or + button) supports inline tokens for recipes, tags, and values:
+
+```
+/expense Lunch at MK #payment-source:cash @THB(200)
+```
+
+| Token | Syntax | Example | Purpose |
+|---|---|---|---|
+| Recipe | `/recipe` | `/expense` | Select recipe (must be first) |
+| Tag | `#tag` or `#scope:tag` | `#cash`, `#payment-source:cash` | Pre-select tags |
+| Value | `@key(number)` | `@THB(200)`, `@hours(1.5)` | Pre-select numeric values |
+
+### Processing
+
+1. Frontend parses tokens → `hint_tags`, `hint_values`
+2. Tokens stripped from text before sending to API
+3. Clean text + hints sent to `/api/ingest/text`
+4. Worker uses hints to decide processing path (direct/partial/summarize)
+
+### Highlighting
+
+Tokens are highlighted inline in the contenteditable input:
+- `/recipe` → purple (action module color)
+- `#tag` → blue (stat module color)
+- `@value(n)` → orange (log module color)
+
+### Autocomplete
+
+- `/` triggers recipe autocomplete (Tab to cycle, Enter to confirm)
+- `#` triggers tag autocomplete (filtered by recipe scopes, Tab/Enter to confirm)
+- `@` triggers value key autocomplete from master values (Tab/Enter to confirm, inserts `@KEY(` ready for number)
 
 ## Discord Bot — Queue-Driven Conversation
 
@@ -469,48 +567,65 @@ The Discord bot uses the queue as the processing backbone. Bot is thin: it posts
 
 ```mermaid
 sequenceDiagram
-    participant U as Discord User
-    participant B as Bot (cmd/bot)
+    participant U as Discord User / Web UI
+    participant C as Client (Bot / Frontend)
     participant S as Server (cmd/server)
     participant W as Queue Worker (goroutine)
     participant O as Ollama
     participant Q as queue.db
     participant DB as pascal.db
 
-    U->>B: @pascal Lunch for 200 THB
-    B->>S: POST /api/ingest/text<br/>{"text":"Lunch for 200 THB","source":"discord"}
-    S->>Q: INSERT (pending, recipe_u=NULL)
-    S-->>B: 202 {queue_id: 42}
-    B->>B: Create Discord thread, map queue_id=42 ↔ thread
+    Note over C,S: Example 1: Complete input (PATH A — no LLM)
+    U->>C: /expense Lunch @THB(200) #payment-source:cash
+    C->>S: POST /api/ingest/text<br/>{"text":"Lunch","recipe_u":"expense",<br/>"hint_tags":["payment-source:cash"],<br/>"hint_values":[{"k":"THB","v":200}]}
+    S->>Q: INSERT (pending)
+    S-->>C: 202 {queue_id: 42}
+    W->>Q: Poll pending → SET processing
+    Note over W: Short text + all required<br/>fields provided → direct create
+    W->>DB: INSERT record (no Ollama call)
+    W->>Q: SET done
+    W-->>C: WS: record:created
 
-    W->>Q: Poll pending
-    W->>Q: SET processing
-    Note over W: No recipe_u → match recipes
-    W->>O: Classify against recipe list
-    O-->>W: {"matches":["track_spending"]}
-    Note over W: 1 match → set recipe_u, extract
-    W->>O: Extract with recipe context
-    O-->>W: {"tl":"Lunch","values":[{"k":"THB","v":200}],"missing":["payment_method"]}
-
-    W->>Q: SET needs_input, store partial
-    W-->>B: WS: queue:needs_input {id:42, missing:["payment_method"]}
-    B->>U: (in thread) I need: payment_method
-
-    U->>B: prompt pay
-    B->>S: POST /api/ingest/text<br/>{"text":"Lunch for 200 THB\nprompt pay","source":"discord","recipe_u":"track_spending"}
-    S->>Q: INSERT (pending, recipe_u="track_spending")
-    S-->>B: 202 {queue_id: 43}
-    B->>B: Update thread mapping to queue_id=43
-
-    W->>Q: Poll pending
-    Note over W: Has recipe_u → skip match, extract
-    W->>O: Extract with combined text + recipe
-    O-->>W: {"tl":"Lunch","values":[{"k":"THB","v":200}],"tags":["prompt-pay"],"missing":[]}
+    Note over C,S: Example 2: Missing fields (PATH B — partial LLM)
+    U->>C: /expense Lunch @THB(200)
+    C->>S: POST /api/ingest/text<br/>{"text":"Lunch","recipe_u":"expense",<br/>"hint_values":[{"k":"THB","v":200}]}
+    S->>Q: INSERT (pending)
+    W->>Q: Poll pending → SET processing
+    Note over W: Short text + missing<br/>tag:payment-source → partial LLM
+    W->>O: Extract ONLY missing: payment-source tag
+    O-->>W: {"tags":["cash"],"missing":[]}
+    Note over W: Merge LLM tags + hint values → finalize
     W->>DB: INSERT record
     W->>Q: SET done
+    W-->>C: WS: record:created
 
-    W-->>B: WS: queue:done {id:43, record:{...}}
-    B->>U: (in thread) Recorded: **Lunch** (THB=200.00)
+    Note over C,S: Example 3: Long text (PATH C — summarize LLM)
+    U->>C: (pastes 500-char meeting notes)
+    C->>S: POST /api/ingest/text<br/>{"text":"...long text...","recipe_u":"meeting"}
+    S->>Q: INSERT (pending)
+    W->>Q: Poll pending → SET processing
+    Note over W: Long text (≥250 chars) → summarize
+    W->>O: Summarize + extract all fields
+    O-->>W: {"tl":"Q3 Planning Meeting","st":3,...}
+    Note over W: title=summary, detail=original text
+    W->>DB: INSERT record
+    W->>Q: SET done
+    W-->>C: WS: record:created
+
+    Note over C,S: Example 4: No recipe (auto-match)
+    U->>C: Lunch for 200 THB cash
+    C->>S: POST /api/ingest/text<br/>{"text":"Lunch for 200 THB cash","source":"discord"}
+    S->>Q: INSERT (pending, recipe_u=NULL)
+    W->>Q: Poll pending
+    W->>O: Classify against recipe list
+    O-->>W: {"matches":["expense"]}
+    Note over W: 1 match → proceed to extract path
+    Note over W: Short text, no hints → PATH B
+    W->>O: Extract missing fields with recipe context
+    O-->>W: {"tags":["cash"],"values":[{"k":"THB","v":200}],...}
+    W->>DB: INSERT record
+    W->>Q: SET done
+    W-->>C: WS: record:created
 ```
 
 ### Bot State (in-memory)

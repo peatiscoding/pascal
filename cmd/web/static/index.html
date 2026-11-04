@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>PASCAL</title>
 
     <!-- PASCAL Design System fonts: Geist (words), Geist Mono (numbers), STIX Two (math) -->
@@ -59,11 +59,11 @@
         <button class="spotlight-trigger" onclick="openSpotlight()" title="Quick log (\u2318K)" aria-label="Quick log">ƒ</button>
     </cds-header>
     <nav class="mobile-nav" id="mobile-nav">
-        <a href="#dashboard" class="mobile-nav-link">Dashboard</a>
-        <a href="#records" class="mobile-nav-link">Records</a>
-        <a href="#recipes" class="mobile-nav-link">Recipes</a>
-        <a href="#master" class="mobile-nav-link">Master Data</a>
-        <a href="#logs" class="mobile-nav-link">Logs</a>
+        <a href="#dashboard" class="mobile-nav-link" data-icon="σ">Dashboard</a>
+        <a href="#records" class="mobile-nav-link" data-icon="Δ">Records</a>
+        <a href="#recipes" class="mobile-nav-link" data-icon="∫">Recipes</a>
+        <a href="#master" class="mobile-nav-link" data-icon="Σ">Master</a>
+        <a class="mobile-nav-link mobile-nav-fab" onclick="openSpotlight()" data-icon="ƒ">Log</a>
     </nav>
     <main id="app"></main>
     <script src="app.js"></script>
