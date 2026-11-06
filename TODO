@@ -16,5 +16,5 @@
 [ ] Value can be explicitly annotated
 [ ] Delete Tag is disallowed due to Foreign Key Constraint
 [ ] Shorthand tag's creation failed to capture the scope.
-[ ] Moving menu to bottom doesn't compensate for the screen's safearea
+[x] Moving menu to bottom doesn't compensate for the screen's safearea
 [ ] The View of the shorthand input dialog is going full height which is not we expected

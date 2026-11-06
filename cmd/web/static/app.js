@@ -1013,14 +1013,14 @@ function openSpotlight() {
     overlay.className = 'spotlight-overlay';
     overlay.innerHTML = `
         <div class="spotlight-box">
-            <div id="spotlight-input" class="spotlight-editable" contenteditable="true" role="textbox" data-placeholder="Log something... /expense Lunch 200 THB"></div>
+            <div id="spotlight-input" class="spotlight-editable" contenteditable="true" role="textbox" enterkeyhint="send" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-placeholder="Log something... /expense Lunch 200 THB"></div>
             <div id="spotlight-shortcuts" class="spotlight-shortcuts">
-                <button type="button" class="spotlight-key" data-key="Escape">esc</button>
+                <span class="spotlight-key" data-key="Escape">esc</span>
                 <span style="flex:1"></span>
-                <button type="button" class="spotlight-key" data-insert="/">/</button>
-                <button type="button" class="spotlight-key" data-insert="#">#</button>
-                <button type="button" class="spotlight-key" data-insert="@">@</button>
-                <button type="button" class="spotlight-key" data-key="Enter">\u21B5</button>
+                <span class="spotlight-key" data-insert="/">/</span>
+                <span class="spotlight-key" data-insert="#">#</span>
+                <span class="spotlight-key" data-insert="@">@</span>
+                <span class="spotlight-key" data-key="Enter">\u21B5</span>
             </div>
             <div id="spotlight-hint" class="spotlight-hint">/recipe \u00b7 #tag \u00b7 @value(n) \u00b7 \u21B5 send \u00b7 esc close</div>
             <div id="spotlight-recipes" class="spotlight-hint" style="display:none"></div>
@@ -1030,10 +1030,34 @@ function openSpotlight() {
     `;
     document.body.appendChild(overlay);
 
+    // Hide mobile nav while spotlight is open
+    const mobileNav = document.getElementById('mobile-nav');
+    if (mobileNav) mobileNav.style.display = 'none';
+
     const input = document.getElementById('spotlight-input');
     const hint = document.getElementById('spotlight-hint');
     const recipesHint = document.getElementById('spotlight-recipes');
     const tagHintEl = document.getElementById('spotlight-tags');
+    const shortcuts = document.getElementById('spotlight-shortcuts');
+
+    // Dock spotlight box above Safari virtual keyboard using visualViewport
+    const spotlightBox = overlay.querySelector('.spotlight-box');
+    if (window.visualViewport) {
+        const vv = window.visualViewport;
+        function dockToKeyboard() {
+            spotlightBox.style.height = vv.height + 'px';
+            overlay.style.height = vv.height + 'px';
+            overlay.style.top = vv.offsetTop + 'px';
+        }
+        vv.addEventListener('resize', dockToKeyboard);
+        vv.addEventListener('scroll', dockToKeyboard);
+        overlay._vvCleanup = () => {
+            vv.removeEventListener('resize', dockToKeyboard);
+            vv.removeEventListener('scroll', dockToKeyboard);
+        };
+        dockToKeyboard();
+    }
+
     input.focus();
 
     // Contenteditable helpers
@@ -1503,7 +1527,13 @@ function openSpotlight() {
 
 function closeSpotlight() {
     const el = document.getElementById('spotlight-overlay');
-    if (el) el.remove();
+    if (el) {
+        if (el._vvCleanup) el._vvCleanup();
+        el.remove();
+    }
+    // Restore mobile nav
+    const mobileNav = document.getElementById('mobile-nav');
+    if (mobileNav) mobileNav.style.display = '';
 }
 
 // Cmd+K / Ctrl+K global shortcut

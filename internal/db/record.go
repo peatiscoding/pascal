@@ -266,6 +266,10 @@ func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
 		where = append(where, "r.ct <= ?")
 		args = append(args, *f.To)
 	}
+	// Default: hide done records older than 7 days
+	if f.Status == nil {
+		where = append(where, "(r.st != 3 OR r.ct >= datetime('now', '-7 days'))")
+	}
 
 	for _, j := range joins {
 		query += " " + j
@@ -273,7 +277,7 @@ func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
 	if len(where) > 0 {
 		query += " WHERE " + joinAnd(where)
 	}
-	query += " ORDER BY r.ct DESC"
+	query += " ORDER BY CASE r.st WHEN 2 THEN 0 WHEN 1 THEN 1 WHEN 0 THEN 2 WHEN 3 THEN 3 ELSE 4 END, r.ct DESC"
 
 	limit := f.Limit
 	if limit <= 0 {

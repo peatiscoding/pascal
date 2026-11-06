@@ -394,6 +394,7 @@ tr.clickable { cursor: pointer; }
     padding: var(--s-2) var(--s-5); border: 1px solid var(--grid);
     border-radius: var(--r-1); background: var(--paper); color: var(--ink-3);
     cursor: pointer; line-height: 1; min-width: 34px; text-align: center;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 .spotlight-key:active { background: var(--signal); color: #fff; border-color: var(--signal); }
 
@@ -405,15 +406,11 @@ tr.clickable { cursor: pointer; }
         max-width: none; border: none; border-radius: 0;
         display: flex; flex-direction: column; height: 100%;
     }
-    .spotlight-editable { flex: 1; }
-    .spotlight-hint { order: 1; }
-    .spotlight-box { padding-bottom: 52px; }
+    .spotlight-editable { flex: 1; overflow-y: auto; }
     .spotlight-shortcuts {
-        order: 2; position: fixed; bottom: 0; left: 0; right: 0;
-        z-index: 9001; padding: var(--s-4) var(--s-5);
+        padding: var(--s-4) var(--s-5);
         padding-bottom: calc(var(--s-4) + env(safe-area-inset-bottom));
         border-top: 1px solid var(--rule); border-bottom: none;
-        background: var(--card);
     }
     .spotlight-key {
         padding: var(--s-4) var(--s-6); font-size: var(--fs-2); min-width: 44px;
