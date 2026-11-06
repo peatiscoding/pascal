@@ -1,6 +1,6 @@
-[ ] Tag UI doesn't seems to match the tag pre-selected in Draft Screen
-[ ] Add new button should be down at the lower right corner or may be pull to add? some better gesture for adding is required.
-[ ] Input screen - Tag overlay misplaced causing a very bad UI output
+[x] Tag UI doesn't seems to match the tag pre-selected in Draft Screen
+[x] Add new button should be down at the lower right corner or may be pull to add? some better gesture for adding is required.
+[x] Input screen - Tag overlay misplaced causing a very bad UI output
 [ ] Should we just drop the text processing
 [ ] Enhance LLM to extract views + Tags instead of interpret?
 [ ] Draft screen seems unncessary
@@ -10,11 +10,11 @@
 [ ] Draft Screen value is extruded off screen
 [ ] The Table of Editing extruded off screen
 [ ] Clicking Tag to filter? (Filter by Tags? e.g. shopping project can be used both /todo and /expense hence the view can be combined)
-[ ] Hide Done items with timeout? - Configurable Screen's metadata
+[x] Hide Done items with timeout? - Configurable Screen's metadata
 [ ] Track the Time for Task to be completed
 [ ] Graph the Time for Task to complete
-[ ] Value can be explicitly annotated
+[x] Value can be explicitly annotated
 [ ] Delete Tag is disallowed due to Foreign Key Constraint
-[ ] Shorthand tag's creation failed to capture the scope.
+[x] Shorthand tag's creation failed to capture the scope.
 [x] Moving menu to bottom doesn't compensate for the screen's safearea
-[ ] The View of the shorthand input dialog is going full height which is not we expected
+[x] The View of the shorthand input dialog is going full height which is not we expected
