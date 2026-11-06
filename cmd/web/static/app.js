@@ -125,6 +125,18 @@ function formatUptime(sec) {
     return Math.floor(sec / 86400) + 'd ' + Math.floor((sec % 86400) / 3600) + 'h';
 }
 
+function relativeDate(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr.replace(' ', 'T') + 'Z');
+    const now = Date.now();
+    const sec = Math.floor((now - d.getTime()) / 1000);
+    if (sec < 60) return 'just now';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+    if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+    if (sec < 604800) return Math.floor(sec / 86400) + 'd ago';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 // --- Records ---
 
 const STATUS_ICONS = ['⏸', '☐', '⚡', '✓'];
@@ -138,7 +150,7 @@ function recordLine(r, primaryScopeName) {
     const tagInfo = (r.tag_info || []);
     const tagTooltip = tagInfo.length ? esc(tagInfo.map(ti => ti.sp ? ti.sp.replaceAll('|', '.') + ': ' + ti.t : ti.t).join('\n')) : '';
     const values = (r.values || []);
-    const date = r.ct ? r.ct.slice(0, 10) : '';
+    const date = relativeDate(r.ct);
 
     // If primary scope set, show tag from that scope; otherwise show recipe name
     let firstCol = r.r ? '/' + esc(r.r) : '';
@@ -310,7 +322,7 @@ function showRecordDetail(r) {
     overlay.innerHTML = `
         <div class="record-detail-box">
             <div class="record-detail-meta" style="margin-bottom:var(--s-5)">
-                <span style="color:var(--ink-3);font-size:var(--fs-0)">${esc(r.ct)}</span>
+                <span style="color:var(--ink-3);font-size:var(--fs-0)" title="${esc(r.ct)}">${relativeDate(r.ct)}</span>
                 ${r.r ? `<span class="badge" style="background:var(--mod-act-lt);color:var(--mod-act-dk)">/${esc(r.r)}</span>` : ''}
             </div>
             <div class="form-group">
