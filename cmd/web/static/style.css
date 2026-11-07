@@ -40,6 +40,9 @@ cds-header-name { --cds-text-primary: var(--paper); }
 .mobile-nav {
     display: none;
 }
+.mobile-fab {
+    display: none;
+}
 @media (max-width: 671px) {
     .mobile-menu-btn { display: none; }
     cds-header { display: none; }
@@ -62,12 +65,19 @@ cds-header-name { --cds-text-primary: var(--paper); }
         font-size: var(--fs-3); line-height: 1;
     }
     .mobile-nav-link:hover, .mobile-nav-link.active { color: var(--signal); }
-    .mobile-nav-fab {
-        color: var(--signal); font-weight: 600;
+    .mobile-fab {
+        display: flex; position: fixed; z-index: 8500;
+        bottom: calc(var(--s-8) + var(--s-7) + env(safe-area-inset-bottom));
+        right: var(--s-5);
+        width: 56px; height: 56px; border-radius: 50%;
+        background: var(--signal); color: #fff; border: none;
+        font-family: var(--font-math); font-style: italic;
+        font-size: var(--fs-5); font-weight: 600;
+        align-items: center; justify-content: center;
+        cursor: pointer;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
     }
-    .mobile-nav-fab::before {
-        font-size: var(--fs-4);
-    }
+    .mobile-fab:active { transform: scale(0.93); }
 }
 .status-dots { display: flex; gap: var(--s-3); align-items: center; padding: 0 var(--s-5); }
 .status-dot {
@@ -82,6 +92,7 @@ h2 { font-size: var(--fs-4); font-weight: 600; letter-spacing: -0.02em; line-hei
 
 /* Dashboard */
 .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--s-5); margin-bottom: var(--s-7); }
+@media (max-width: 671px) { .health-grid { grid-template-columns: repeat(2, 1fr); } }
 .health-card {
     border: var(--rule); border-radius: var(--r-2); padding: var(--s-6);
     display: flex; flex-direction: column; gap: var(--s-4);
@@ -90,13 +101,14 @@ h2 { font-size: var(--fs-4); font-weight: 600; letter-spacing: -0.02em; line-hei
 .health-card h3 { font-family: var(--font-mono); font-size: var(--fs-0); text-transform: uppercase; color: var(--ink-3); letter-spacing: 0.08em; font-weight: 400; }
 .health-status { font-size: var(--fs-1); font-weight: 600; }
 .health-status.ok { color: var(--pos); }
-.health-status.ok::before { content: "\25cf "; }
+.health-status.ok::before { content: "\25cf"; margin-right: var(--s-2); }
 .health-status.down { color: var(--neg); }
-.health-status.down::before { content: "\25cf "; }
+.health-status.down::before { content: "\25cf"; margin-right: var(--s-2); }
 .health-status.loading { color: var(--ink-4); }
-.health-status.loading::before { content: "\2248 "; } /* ≈ */
+.health-status.loading::before { content: "\2248"; margin-right: var(--s-2); } /* ≈ */
 .health-detail { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--fs-0); color: var(--ink-4); }
 .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--s-5); margin-top: var(--s-5); }
+@media (max-width: 671px) { .stats-row { grid-template-columns: repeat(3, 1fr); } }
 .stat-box {
     background: var(--card); border: var(--rule); border-radius: var(--r-2);
     padding: var(--s-6); display: flex; flex-direction: column-reverse; gap: var(--s-4);
@@ -420,6 +432,27 @@ tr.clickable { cursor: pointer; }
     padding: var(--s-4) var(--s-6); font-family: var(--font-mono); font-size: var(--fs-0); color: var(--ink-4);
     background: var(--paper);
 }
+/* FAB speed-dial menu */
+.fab-scrim {
+    position: fixed; inset: 0; z-index: 8400; background: rgba(0,0,0,0.25);
+}
+.fab-menu {
+    position: fixed; z-index: 8600;
+    right: var(--s-5); bottom: calc(var(--s-8) + var(--s-7) + 56px + var(--s-4) + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column-reverse; gap: var(--s-3);
+    opacity: 0; transform: translateY(var(--s-4));
+    transition: opacity 0.15s, transform 0.15s;
+}
+.fab-menu-open { opacity: 1; transform: translateY(0); }
+.fab-menu-item {
+    padding: var(--s-4) var(--s-6); min-height: 40px; border: 1px solid var(--rule); border-radius: var(--r-2);
+    background: var(--card); color: var(--ink); font-size: var(--fs-2); font-family: var(--font-mono);
+    cursor: pointer; text-align: right; white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+}
+.fab-menu-item:active { border-color: var(--signal); }
+.fab-menu-free { color: var(--ink-3); font-style: italic; }
+.mobile-fab.fab-active { background: var(--ink-3); transform: rotate(45deg); }
 .spotlight-trigger {
     background: var(--signal); color: #fff; border: none; border-radius: var(--r-2);
     width: 34px; height: 34px; font-size: var(--fs-2); line-height: 1;

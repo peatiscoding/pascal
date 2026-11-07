@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -287,8 +288,13 @@ func (w *Worker) directCreate(item *db.QueueItem, recipe *db.RecipeFull, hintTag
 		bareTags[i] = bareTagName(t)
 	}
 
+	title := cleanAnnotations(item.Payload)
+	if title == "" {
+		title = item.Payload
+	}
+
 	result := extractResult{
-		Title:  item.Payload,
+		Title:  title,
 		Status: st,
 		Tags:   bareTags,
 		Values: hintValues,
@@ -575,6 +581,18 @@ func mergeValues(llmValues []db.RecordValue, hintValues []db.RecordValue) []db.R
 		llmValues = append(llmValues, hv)
 	}
 	return llmValues
+}
+
+var reTag = regexp.MustCompile(`#[a-zA-Z0-9_:-]+\s*`)
+var reValueFull = regexp.MustCompile(`@[a-zA-Z0-9_-]+\([^)]*\)\s*`)
+var reValueBare = regexp.MustCompile(`@[a-zA-Z0-9_-]*\s*`)
+
+// cleanAnnotations strips #tag and @value(...) tokens from text for display as title.
+func cleanAnnotations(s string) string {
+	s = reTag.ReplaceAllString(s, "")
+	s = reValueFull.ReplaceAllString(s, "")
+	s = reValueBare.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
 }
 
 func bareTagName(t string) string {

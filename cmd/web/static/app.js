@@ -1018,7 +1018,58 @@ async function deleteScopeItem(id, name) {
 
 // --- Ingest Spotlight ---
 
-function openSpotlight() {
+async function openRecipePicker() {
+    // Toggle off if already open
+    const existing = document.getElementById('fab-menu');
+    if (existing) { closeFabMenu(); return; }
+    if (document.getElementById('spotlight-overlay')) return;
+
+    const fab = document.querySelector('.mobile-fab');
+    const recipes = await api('/api/recipes').catch(() => []);
+
+    const menu = document.createElement('div');
+    menu.id = 'fab-menu';
+    menu.className = 'fab-menu';
+    menu.innerHTML = recipes.map(r =>
+        `<button class="fab-menu-item badge badge-st-${r.default_st}" data-u="${r.u}">/${r.u}</button>`
+    ).join('') + `<button class="fab-menu-item fab-menu-free" data-u="">ƒ free</button>`;
+    document.body.appendChild(menu);
+
+    // Scrim to catch outside taps
+    const scrim = document.createElement('div');
+    scrim.id = 'fab-scrim';
+    scrim.className = 'fab-scrim';
+    document.body.appendChild(scrim);
+    scrim.onclick = closeFabMenu;
+
+    if (fab) fab.classList.add('fab-active');
+
+    // Animate in
+    requestAnimationFrame(() => menu.classList.add('fab-menu-open'));
+
+    menu.querySelectorAll('.fab-menu-item').forEach(btn => {
+        btn.onclick = () => {
+            const u = btn.dataset.u;
+            closeFabMenu();
+            if (u) {
+                openSpotlight('/' + u + ' ');
+            } else {
+                openSpotlight();
+            }
+        };
+    });
+}
+
+function closeFabMenu() {
+    const menu = document.getElementById('fab-menu');
+    const scrim = document.getElementById('fab-scrim');
+    const fab = document.querySelector('.mobile-fab');
+    if (menu) menu.remove();
+    if (scrim) scrim.remove();
+    if (fab) fab.classList.remove('fab-active');
+}
+
+function openSpotlight(initialText) {
     if (document.getElementById('spotlight-overlay')) return;
     const overlay = document.createElement('div');
     overlay.id = 'spotlight-overlay';
@@ -1042,9 +1093,11 @@ function openSpotlight() {
     `;
     document.body.appendChild(overlay);
 
-    // Hide mobile nav while spotlight is open
+    // Hide mobile nav + FAB while spotlight is open
     const mobileNav = document.getElementById('mobile-nav');
+    const mobileFab = document.querySelector('.mobile-fab');
     if (mobileNav) mobileNav.style.display = 'none';
+    if (mobileFab) mobileFab.style.display = 'none';
 
     const input = document.getElementById('spotlight-input');
     const hint = document.getElementById('spotlight-hint');
@@ -1218,6 +1271,18 @@ function openSpotlight() {
         const recipes = await getRecipes();
         const recipe = recipes.find(r => r.u === u);
         recipeScopes = (recipe && recipe.scopes) ? recipe.scopes.map(s => s.scope_name) : [];
+    }
+
+    // Pre-fill with initial text (e.g. from recipe picker)
+    if (initialText) {
+        const recipeMatch = initialText.match(/^\/(\S+)\s/);
+        if (recipeMatch) {
+            confirmRecipeChoice(recipeMatch[1]);
+        } else {
+            input.textContent = initialText;
+            highlightInput();
+            setCursorOffset(initialText.length);
+        }
     }
 
     function renderTagHints() {
@@ -1487,16 +1552,11 @@ function openSpotlight() {
                 const v = parseFloat(vm[2]);
                 if (!isNaN(v)) hintValues.push({ k: vm[1], v });
             }
-            // Strip #tokens and @tokens from text
-            let cleanText = raw
-                .replace(/#[a-zA-Z0-9_:-]+\s*/g, '')
-                .replace(/@[a-zA-Z0-9_-]+\([^)]*\)\s*/g, '')
-                .replace(/@[a-zA-Z0-9_-]*\s*/g, '')
-                .trim();
-
-            let payload = { text: cleanText, source: 'web' };
+            // Keep annotated text intact for LLM context; only strip /recipe prefix
+            let text = raw.trim();
+            let payload = { text, source: 'web' };
             if (slashMatch) {
-                const textAfterRecipe = cleanText.replace(/^\/\S+\s*/, '');
+                const textAfterRecipe = text.replace(/^\/\S+\s*/, '');
                 payload = { text: textAfterRecipe, source: 'web', recipe_u: slashMatch[1] };
             }
             if (hintTags.length > 0) {
@@ -1543,9 +1603,11 @@ function closeSpotlight() {
         if (el._vvCleanup) el._vvCleanup();
         el.remove();
     }
-    // Restore mobile nav
+    // Restore mobile nav + FAB
     const mobileNav = document.getElementById('mobile-nav');
+    const fab = document.querySelector('.mobile-fab');
     if (mobileNav) mobileNav.style.display = '';
+    if (fab) fab.style.display = '';
 }
 
 // Cmd+K / Ctrl+K global shortcut
