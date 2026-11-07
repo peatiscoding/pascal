@@ -32,6 +32,29 @@ func GetQueueItem(db *sql.DB, id int) (*QueueItem, error) {
 	return item, nil
 }
 
+func ListActiveQueue(db *sql.DB) ([]QueueItem, error) {
+	rows, err := db.Query(
+		`SELECT id, payload, source, recipe_u, hint_tags, hint_values, result, status, attempts, error, created_at, processed_at
+		 FROM ingest_queue WHERE status IN ('pending','processing','needs_input','ambiguous')
+		 ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []QueueItem
+	for rows.Next() {
+		var item QueueItem
+		if err := rows.Scan(&item.ID, &item.Payload, &item.Source, &item.RecipeU, &item.HintTags, &item.HintValues, &item.Result, &item.Status, &item.Attempts, &item.Error, &item.CreatedAt, &item.ProcessedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func Enqueue(db *sql.DB, payload, source string, recipeU *string, hintTags *string, hintValues *string) (int64, error) {
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM ingest_queue WHERE status='pending'`).Scan(&count); err != nil {

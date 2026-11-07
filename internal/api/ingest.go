@@ -75,6 +75,19 @@ func (s *Server) ingestText(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) listActiveQueue(w http.ResponseWriter, r *http.Request) {
+	items, err := db.ListActiveQueue(s.queueDB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if items == nil {
+		items = []db.QueueItem{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
 func (s *Server) getQueueItem(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.Atoi(idStr)

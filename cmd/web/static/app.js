@@ -130,10 +130,10 @@ function relativeDate(isoStr) {
     const d = new Date(isoStr.replace(' ', 'T') + 'Z');
     const now = Date.now();
     const sec = Math.floor((now - d.getTime()) / 1000);
-    if (sec < 60) return 'just now';
-    if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
-    if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
-    if (sec < 604800) return Math.floor(sec / 86400) + 'd ago';
+    if (sec < 60) return 'now';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm';
+    if (sec < 86400) return Math.floor(sec / 3600) + 'h';
+    if (sec < 604800) return Math.floor(sec / 86400) + 'd';
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
@@ -160,11 +160,10 @@ function recordLine(r, primaryScopeName) {
     }
 
     return `<div class="rec-line" data-record='${esc(JSON.stringify(r))}'>
-        <span class="rec-recipe">${firstCol}</span>
         <span class="rec-st" data-st="${r.st}">${statusIcon(r.st)}</span>
+        <span class="rec-recipe">${firstCol}</span>
         <span class="rec-title">${esc(r.tl)}</span>
         ${tagInfo.length ? `<span class="rec-tags" title="${tagTooltip}"><span class="rec-tag-dots">${tagInfo.map(ti => `<span class="rec-dot${ti.sp ? ' rec-dot-scoped' : ''}"></span>`).join('')}</span></span>` : ''}
-        <span class="rec-spacer"></span>
         ${values.map(v => `<span class="rec-val"><span class="num">${v.dp ? v.v.toFixed(v.dp) : v.v}</span> <span class="unit">${esc(v.k)}</span></span>`).join('')}
         ${date ? `<span class="rec-date num">${date}</span>` : ''}
         <span class="rec-del" title="Delete">×</span>
@@ -172,28 +171,107 @@ function recordLine(r, primaryScopeName) {
 }
 
 function buildDailyChart(records, valueKey) {
+    const now = new Date();
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        days.push(d.toISOString().slice(0, 10));
+    }
+
     const byDay = {};
+    days.forEach(d => { byDay[d] = 0; });
     records.forEach(r => {
         const day = (r.ct || '').slice(0, 10);
-        if (!day) return;
+        if (byDay[day] === undefined) return;
         (r.values || []).forEach(v => {
-            if (v.k === valueKey) {
-                byDay[day] = (byDay[day] || 0) + v.v;
-            }
+            if (v.k === valueKey) byDay[day] += v.v;
         });
     });
-    const days = Object.keys(byDay).sort();
-    if (days.length < 2) return '';
+
     const vals = days.map(d => byDay[d]);
-    const max = Math.max(...vals);
-    const min = Math.min(...vals, 0);
-    const range = max - min || 1;
-    const w = 280, h = 80, pad = 2;
-    const step = (w - pad * 2) / (days.length - 1);
-    const points = vals.map((v, i) => `${pad + i * step},${h - pad - ((v - min) / range) * (h - pad * 2)}`).join(' ');
+    const max = Math.max(...vals, 1);
+    const w = 280, h = 80, barW = (w - 8) / 7;
+
+    const bars = days.map((d, i) => {
+        const x = 4 + i * barW;
+        const barH = (byDay[d] / max) * (h - 16);
+        if (byDay[d] === 0) return '';
+        return `<rect x="${x + 2}" y="${h - 12 - barH}" width="${barW - 4}" height="${barH}" fill="var(--mod-stat)"/>`;
+    }).join('');
+
+    const dayLabels = days.map((d, i) => {
+        const x = 4 + i * barW + barW / 2;
+        const dow = new Date(d + 'T00:00:00').getDay();
+        const label = ['S','M','T','W','T','F','S'][dow];
+        const color = dow === 0 ? 'var(--neg)' : 'var(--ink-4)';
+        return `<text x="${x}" y="${h - 1}" text-anchor="middle" fill="${color}" font-size="8" font-family="var(--font-mono)">${label}</text>`;
+    }).join('');
+
     return `<svg class="rec-chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-        <polyline points="${points}" fill="none" stroke="var(--mod-stat)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        ${bars}${dayLabels}
     </svg>`;
+}
+
+function buildTodoChart(records) {
+    // Last 7 days: bars showing added (positive) vs completed (negative)
+    const now = new Date();
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        days.push(d.toISOString().slice(0, 10));
+    }
+
+    const added = {}, done = {};
+    days.forEach(d => { added[d] = 0; done[d] = 0; });
+
+    records.forEach(r => {
+        const day = (r.ct || '').slice(0, 10);
+        if (added[day] !== undefined) added[day]++;
+        if (r.st === 3 && done[day] !== undefined) done[day]++;
+    });
+
+    const addedVals = days.map(d => added[d]);
+    const doneVals = days.map(d => done[d]);
+    const maxUp = Math.max(...addedVals, 1);
+    const maxDown = Math.max(...doneVals, 1);
+
+    const w = 280, h = 80, barW = (w - 8) / 7, mid = h * (maxUp / (maxUp + maxDown));
+
+    const bars = days.map((d, i) => {
+        const x = 4 + i * barW;
+        const upH = (added[d] / maxUp) * (mid - 2);
+        const dnH = (done[d] / maxDown) * (h - mid - 2);
+        let svg = '';
+        if (added[d] > 0) svg += `<rect x="${x + 2}" y="${mid - upH}" width="${barW - 4}" height="${upH}" fill="var(--mod-act)"/>`;
+        if (done[d] > 0) svg += `<rect x="${x + 2}" y="${mid}" width="${barW - 4}" height="${dnH}" fill="var(--pos)"/>`;
+        return svg;
+    }).join('');
+
+    const dayLabels = days.map((d, i) => {
+        const x = 4 + i * barW + barW / 2;
+        const dow = new Date(d + 'T00:00:00').getDay();
+        const label = ['S','M','T','W','T','F','S'][dow];
+        const color = dow === 0 ? 'var(--neg)' : 'var(--ink-4)';
+        return `<text x="${x}" y="${h - 1}" text-anchor="middle" fill="${color}" font-size="8" font-family="var(--font-mono)">${label}</text>`;
+    }).join('');
+
+    // Midline
+    const midline = `<line x1="4" y1="${mid}" x2="${w - 4}" y2="${mid}" stroke="var(--rule)" stroke-width="1"/>`;
+
+    const totalAdded = addedVals.reduce((a, b) => a + b, 0);
+    const totalDone = doneVals.reduce((a, b) => a + b, 0);
+
+    return `<div class="carousel-slide">
+        <div class="carousel-header">
+            <span style="color:var(--mod-act)">+${totalAdded} added</span>
+            <span style="color:var(--pos)">−${totalDone} done</span>
+        </div>
+        <svg class="rec-chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+            ${midline}${bars}${dayLabels}
+        </svg>
+    </div>`;
 }
 
 function buildCarousel(groups) {
@@ -233,24 +311,25 @@ window.carouselNav = function(dir) {
     track.scrollBy({ left: dir * slideW, behavior: 'smooth' });
 };
 
-async function renderRecords() {
-    app.innerHTML = '<h2 style="margin-bottom:var(--s-5)">Records</h2><div id="records-list">Loading...</div>';
-    try {
-        const [records, recipes] = await Promise.all([api('/api/records'), api('/api/recipes').catch(() => [])]);
-        const el = document.getElementById('records-list');
-        if (!records || records.length === 0) {
-            el.innerHTML = '<p class="empty">No records yet.</p>';
-            return;
-        }
+let _activeRecordTab = null;
 
-        // Build primary scope lookup: recipe usecase → scope name
+async function renderRecords() {
+    app.innerHTML = '<div id="records-tabs" class="rec-tabs"></div><div id="records-list">Loading...</div>';
+    try {
+        const [records, recipes, drafts] = await Promise.all([
+            api('/api/records'),
+            api('/api/recipes').catch(() => []),
+            api('/api/ingest/text').catch(() => []),
+        ]);
+
+        // Build primary scope lookup
         const primaryScope = {};
         (recipes || []).forEach(r => { if (r.ps_name) primaryScope[r.u] = r.ps_name; });
 
         // Group by recipe
         const groups = {};
         const noRecipe = [];
-        records.forEach(r => {
+        (records || []).forEach(r => {
             if (r.r) {
                 (groups[r.r] = groups[r.r] || []).push(r);
             } else {
@@ -258,43 +337,83 @@ async function renderRecords() {
             }
         });
 
-        // Build carousel for all page
-        const carousel = buildCarousel(groups);
+        // Build tabs: recipe tabs + other + draft
+        const tabKeys = [...Object.keys(groups)];
+        if (noRecipe.length) tabKeys.push('_none');
+        tabKeys.push('_draft');
 
-        // Build grouped list
-        let html = carousel;
-        for (const [recipe, recs] of Object.entries(groups)) {
-            const ps = primaryScope[recipe];
-            html += `<div class="rec-group">
-                <div class="rec-group-header">
-                    <span class="rec-recipe">/${esc(recipe)}</span>
-                    <span class="rec-group-count num">${recs.length}</span>
-                </div>
-                ${recs.map(r => recordLine(r, ps)).join('')}
-            </div>`;
-        }
-        if (noRecipe.length) {
-            html += `<div class="rec-group">
-                <div class="rec-group-header">
-                    <span style="color:var(--ink-4)">Uncategorised</span>
-                    <span class="rec-group-count num">${noRecipe.length}</span>
-                </div>
-                ${noRecipe.map(r => recordLine(r)).join('')}
-            </div>`;
-        }
+        // Default to first recipe tab
+        if (!_activeRecordTab || !tabKeys.includes(_activeRecordTab)) _activeRecordTab = tabKeys[0] || '_draft';
 
-        el.innerHTML = html;
+        const tabsEl = document.getElementById('records-tabs');
+        tabsEl.innerHTML = tabKeys.map(k => {
+            const label = k === '_none' ? 'Other' : k === '_draft' ? 'Draft' : '/' + esc(k);
+            const count = k === '_none' ? noRecipe.length : k === '_draft' ? (drafts || []).length : (groups[k] || []).length;
+            const cls = k === '_draft' && count > 0 ? ' rec-tab-draft' : '';
+            return `<button class="rec-tab${cls}${_activeRecordTab === k ? ' active' : ''}" data-tab="${esc(k)}">${label} <span class="num">${count}</span></button>`;
+        }).join('');
 
-        // Bind events
-        el.querySelectorAll('.rec-line').forEach(div => {
-            const r = JSON.parse(div.dataset.record);
-            div.querySelector('.rec-del').onclick = (e) => { e.stopPropagation(); deleteRecord(r); };
-            div.querySelector('.rec-st').onclick = (e) => { e.stopPropagation(); toggleStatus(r); };
-            div.onclick = () => showRecordDetail(r);
+        // Build recipe default status lookup
+        const recipeDefSt = {};
+        (recipes || []).forEach(r => { recipeDefSt[r.u] = r.default_st; });
+
+        const ctx = { groups, noRecipe, primaryScope, drafts: drafts || [], recipeDefSt };
+
+        tabsEl.querySelectorAll('.rec-tab').forEach(btn => {
+            btn.onclick = () => {
+                _activeRecordTab = btn.dataset.tab;
+                renderRecordsList(ctx);
+                tabsEl.querySelectorAll('.rec-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === _activeRecordTab));
+            };
         });
+
+        renderRecordsList(ctx);
     } catch (e) {
         document.getElementById('records-list').innerHTML = `<p class="empty">Error: ${esc(e.message)}</p>`;
     }
+}
+
+function renderRecordsList(ctx) {
+    const el = document.getElementById('records-list');
+    const tab = _activeRecordTab;
+
+    let html = '';
+    if (tab === '_draft') {
+        if (ctx.drafts.length === 0) {
+            html = '<p class="empty" style="padding:var(--s-6)">No drafts.</p>';
+        } else {
+            html = ctx.drafts.map(d => {
+                const status = d.status === 'needs_input' ? 'needs input' : d.status;
+                return `<div class="rec-line draft-line" onclick="location.hash='#draft/${d.id}'">
+                    <span class="badge badge-st-2" style="flex-shrink:0">${esc(status)}</span>
+                    <span class="rec-title">${esc(d.payload)}</span>
+                    <span class="rec-date num">${relativeDate(d.created_at)}</span>
+                </div>`;
+            }).join('');
+        }
+    } else if (tab === '_none') {
+        html += ctx.noRecipe.map(r => recordLine(r)).join('');
+    } else {
+        const recs = ctx.groups[tab] || [];
+        const ps = ctx.primaryScope[tab];
+        // Todo-type recipes (default_st=1) get added/done bar chart
+        if (ctx.recipeDefSt[tab] === 1) {
+            html += `<div class="carousel">${buildTodoChart(recs)}</div>`;
+        } else {
+            html += buildCarousel({ [tab]: recs });
+        }
+        html += recs.map(r => recordLine(r, ps)).join('');
+    }
+
+    if (!html) html = '<p class="empty">No records.</p>';
+    el.innerHTML = html;
+
+    el.querySelectorAll('.rec-line:not(.draft-line)').forEach(div => {
+        const r = JSON.parse(div.dataset.record);
+        div.querySelector('.rec-del').onclick = (e) => { e.stopPropagation(); deleteRecord(r); };
+        div.querySelector('.rec-st').onclick = (e) => { e.stopPropagation(); toggleStatus(r); };
+        div.onclick = () => showRecordDetail(r);
+    });
 }
 
 async function toggleStatus(r) {
@@ -1801,6 +1920,8 @@ function renderDraftContent(item, queueId) {
                         body: JSON.stringify(body),
                     });
                 }
+                // Dismiss queue item after successful save
+                await api('/api/ingest/text/' + queueId, { method: 'DELETE' }).catch(() => {});
                 invalidateMasterCache();
                 el.innerHTML = `
                     <div class="draft-status">
@@ -1968,6 +2089,7 @@ function renderDraftContent(item, queueId) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ tl, st: partial.st || 3, tags, values, r: item.recipe_u }),
                 });
+                await api('/api/ingest/text/' + queueId, { method: 'DELETE' }).catch(() => {});
                 invalidateMasterCache();
                 clearInterval(draftPollTimer);
                 el.innerHTML = `
