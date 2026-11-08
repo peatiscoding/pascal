@@ -1,5 +1,3 @@
-const API = window.PASCAL_API_URL || '';
-const BOT_URL = window.PASCAL_BOT_URL || '';
 const app = document.getElementById('app');
 let logSource = null;
 
@@ -47,27 +45,7 @@ function route() {
 window.addEventListener('hashchange', route);
 route();
 
-// --- API helpers ---
-
-async function api(path, opts) {
-    const resp = await fetch(API + path, opts);
-    if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || resp.statusText);
-    }
-    if (resp.status === 204) return null;
-    return resp.json();
-}
-
-async function healthCheck(url) {
-    try {
-        const resp = await fetch(url, { signal: AbortSignal.timeout(3000) });
-        if (!resp.ok) return { status: 'down' };
-        return await resp.json();
-    } catch {
-        return { status: 'down' };
-    }
-}
+// --- API (see client.js) ---
 
 // --- Dashboard ---
 
@@ -77,28 +55,28 @@ async function renderDashboard() {
         <div class="health-grid">
             <div class="health-card" id="h-server"><h3>API Server</h3><span class="health-status loading">checking...</span></div>
             <div class="health-card" id="h-bot"><h3>Discord Bot</h3><span class="health-status loading">checking...</span></div>
-            <div class="health-card" id="h-web"><h3>Web UI</h3><span class="health-status loading">checking...</span></div>
             <div class="health-card" id="h-mcp"><h3>MCP Server</h3><span class="health-status loading">checking...</span></div>
         </div>
         <div class="stats-row" id="dash-stats"></div>
     `;
 
-    const [server, bot, web, mcp] = await Promise.all([
-        healthCheck(API + '/api/health'),
-        healthCheck(BOT_URL + '/health'),
-        healthCheck('/health'),
-        healthCheck(API + '/api/mcp/probe'),
+    const [server, bot, mcp] = await Promise.all([
+        Client.checkServer(),
+        Client.checkBot(),
+        Client.checkMcp(),
     ]);
 
     renderHealthCard('h-server', server);
     renderHealthCard('h-bot', bot);
-    renderHealthCard('h-web', web);
     renderHealthCard('h-mcp', mcp);
 
     // Stats from server health
     if (server.status !== 'down') {
+        const drafts = await Client.listDrafts();
+        const draftCount = drafts.length;
         document.getElementById('dash-stats').innerHTML = `
             <div class="stat-box"><div class="val">${server.record_count ?? '—'}</div><div class="label">Records</div></div>
+            <div class="stat-box"><div class="val">${draftCount}</div><div class="label">Drafts</div></div>
             <div class="stat-box"><div class="val">${server.queue_depth ?? '—'}</div><div class="label">Queue Depth</div></div>
             <div class="stat-box"><div class="val">${formatUptime(server.uptime_sec)}</div><div class="label">Server Uptime</div></div>
         `;
@@ -317,9 +295,9 @@ async function renderRecords() {
     app.innerHTML = '<div id="records-tabs" class="rec-tabs"></div><div id="records-list">Loading...</div>';
     try {
         const [records, recipes, drafts] = await Promise.all([
-            api('/api/records'),
-            api('/api/recipes').catch(() => []),
-            api('/api/ingest/text').catch(() => []),
+            Client.listRecords(),
+            Client.listRecipes().catch(() => []),
+            Client.listDrafts(),
         ]);
 
         // Build primary scope lookup
@@ -424,11 +402,7 @@ async function toggleStatus(r) {
         if (missing.length > 0 && !confirm(`Missing values required for "${STATUS_LABELS[next]}":\n\n${missing.join(', ')}\n\nContinue anyway?`)) return;
     }
     try {
-        await api('/api/records/' + b64ToHex(r.id), {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ st: next })
-        });
+        await Client.updateRecord(b64ToHex(r.id), { st: next });
         renderRecords();
     } catch (e) { alert('Error: ' + e.message); }
 }
@@ -569,11 +543,7 @@ function showRecordDetail(r) {
             const body = { full: true, tl, st, tags, values };
             if (dt) body.dt = dt;
             if (r.r) body.r = r.r;
-            await api('/api/records/' + b64ToHex(r.id), {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
+            await Client.updateRecord(b64ToHex(r.id), body);
             invalidateMasterCache();
             closeRecordDetail();
             renderRecords();
@@ -598,7 +568,7 @@ function closeRecordDetail() {
 async function deleteRecord(r) {
     if (!confirm(`Delete "${r.tl}"?`)) return;
     try {
-        await api('/api/records/' + b64ToHex(r.id), { method: 'DELETE' });
+        await Client.deleteRecord(b64ToHex(r.id));
         closeRecordDetail();
         renderRecords();
     } catch (e) { alert('Error: ' + e.message); }
@@ -615,7 +585,7 @@ async function renderRecipes() {
         <div id="recipes-list">Loading...</div>
     `;
     try {
-        const recipes = await api('/api/recipes');
+        const recipes = await Client.listRecipes();
         const el = document.getElementById('recipes-list');
         if (!recipes || recipes.length === 0) {
             el.innerHTML = '<p class="empty">No recipes yet. Create one to get started.</p>';
@@ -652,7 +622,7 @@ async function getRecipe(usecase) {
     if (!usecase) return null;
     if (_recipeCache[usecase]) return _recipeCache[usecase];
     try {
-        const r = await api('/api/recipes/' + encodeURIComponent(usecase));
+        const r = await Client.getRecipe(usecase);
         _recipeCache[usecase] = r;
         return r;
     } catch { return null; }
@@ -673,10 +643,10 @@ let _scopeOptions = null;
 
 async function loadOptions() {
     if (!_masterValues) {
-        _masterValues = await api('/api/master-values').catch(() => []);
+        _masterValues = await Client.listValues().catch(() => []);
     }
     if (!_scopeOptions) {
-        _scopeOptions = await api('/api/scopes').catch(() => []);
+        _scopeOptions = await Client.listScopes().catch(() => []);
     }
 }
 
@@ -689,7 +659,7 @@ async function renderRecipeForm(usecase) {
 
     if (isEdit) {
         try {
-            recipe = await api('/api/recipes/' + encodeURIComponent(usecase));
+            recipe = await Client.getRecipe(usecase);
         } catch {
             app.innerHTML = `<p class="empty">Recipe not found.</p>`;
             return;
@@ -821,13 +791,13 @@ async function saveRecipe(isEdit) {
         return { scope_id, required: row.querySelector('.rs-req').checked };
     }).filter(s => s.scope_id);
 
-    const body = JSON.stringify({ u, d, ex, default_st, ps, values, scopes });
+    const body = { u, d, ex, default_st, ps, values, scopes };
 
     try {
         if (isEdit) {
-            await api('/api/recipes/' + encodeURIComponent(u), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body });
+            await Client.updateRecipe(u, body);
         } else {
-            await api('/api/recipes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+            await Client.createRecipe(body);
         }
         delete _recipeCache[u];
         location.hash = '#recipes';
@@ -839,7 +809,7 @@ async function saveRecipe(isEdit) {
 async function deleteRecipe(u) {
     if (!confirm('Delete recipe "' + u + '"? Records referencing it will lose their recipe link.')) return;
     try {
-        await api('/api/recipes/' + encodeURIComponent(u), { method: 'DELETE' });
+        await Client.deleteRecipe(u);
         delete _recipeCache[u];
         location.hash = '#recipes';
     } catch (e) {
@@ -872,7 +842,7 @@ async function renderMasterValues() {
     const el = document.getElementById('master-content');
     el.innerHTML = 'Loading...';
     try {
-        const values = await api('/api/master-values');
+        const values = await Client.listValues();
         el.innerHTML = `
             <p class="tab-desc">Values define numeric types attached to records (e.g. THB, calories, tokens). Used for <strong>aggregation</strong> — summing, averaging, and charting over time.</p>
             <div class="toolbar" style="margin-top:var(--s-5)">
@@ -924,9 +894,9 @@ async function saveMasterValue(e, isEdit) {
     if (!k || !d) return;
     try {
         if (isEdit) {
-            await api('/api/master-values/' + encodeURIComponent(k), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k, d, dp }) });
+            await Client.updateValue(k, { k, d, dp });
         } else {
-            await api('/api/master-values', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k, d, dp }) });
+            await Client.createValue({ k, d, dp });
         }
         _masterValues = null; // invalidate cache
         renderMasterValues();
@@ -936,7 +906,7 @@ async function saveMasterValue(e, isEdit) {
 async function deleteMasterValue(k) {
     if (!confirm('Delete value type "' + k + '"?')) return;
     try {
-        await api('/api/master-values/' + encodeURIComponent(k), { method: 'DELETE' });
+        await Client.deleteValue(k);
         _masterValues = null;
         renderMasterValues();
     } catch (e) { alert('Error: ' + e.message); }
@@ -952,8 +922,8 @@ async function renderMasterTags() {
     el.innerHTML = 'Loading...';
     try {
         const [tags, scopes] = await Promise.all([
-            api('/api/tags'),
-            api('/api/scopes'),
+            Client.listTags(),
+            Client.listScopes(),
         ]);
         _tagsCache = tags || [];
         _scopesCache = scopes || [];
@@ -1012,9 +982,9 @@ async function saveTag(e, isEdit) {
     if (!t) return;
     try {
         if (isEdit) {
-            await api('/api/tags/' + encodeURIComponent(t), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t, s, d }) });
+            await Client.updateTag(t, { t, s, d });
         } else {
-            await api('/api/tags', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t, s, d }) });
+            await Client.createTag({ t, s, d });
         }
         _tagsCache = [];
         renderMasterTags();
@@ -1024,7 +994,7 @@ async function saveTag(e, isEdit) {
 async function deleteTagItem(t) {
     if (!confirm('Delete tag "' + t + '"?')) return;
     try {
-        await api('/api/tags/' + encodeURIComponent(t), { method: 'DELETE' });
+        await Client.deleteTag(t);
         _tagsCache = [];
         renderMasterTags();
     } catch (e) { alert('Error: ' + e.message); }
@@ -1038,7 +1008,7 @@ async function renderMasterScopes() {
     const el = document.getElementById('master-content');
     el.innerHTML = 'Loading...';
     try {
-        _scopesData = await api('/api/scopes') || [];
+        _scopesData = await Client.listScopes() || [];
         el.innerHTML = `
             <p class="tab-desc">Scopes define the organizational hierarchy and serve as tag grouping. Each record has exactly <strong>one</strong> scope. Tags linked to a scope are exclusive — one per scope per record. (e.g. Work|ProjectX, Personal|Health).</p>
             <div class="toolbar" style="margin-top:var(--s-5)">
@@ -1119,9 +1089,9 @@ async function saveScope(e, id, parentId) {
     const parent_id = parentId;
     try {
         if (id != null) {
-            await api('/api/scopes/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parent_id: _scopesData.find(s => s.id === id)?.parent_id ?? null }) });
+            await Client.updateScope(id, { name, parent_id: _scopesData.find(s => s.id === id)?.parent_id ?? null });
         } else {
-            await api('/api/scopes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parent_id }) });
+            await Client.createScope({ name, parent_id });
         }
         renderMasterScopes();
     } catch (e) { alert('Error: ' + e.message); }
@@ -1130,7 +1100,7 @@ async function saveScope(e, id, parentId) {
 async function deleteScopeItem(id, name) {
     if (!confirm('Delete scope "' + name + '" and all children?')) return;
     try {
-        await api('/api/scopes/' + id, { method: 'DELETE' });
+        await Client.deleteScope(id);
         renderMasterScopes();
     } catch (e) { alert('Error: ' + e.message); }
 }
@@ -1144,7 +1114,7 @@ async function openRecipePicker() {
     if (document.getElementById('spotlight-overlay')) return;
 
     const fab = document.querySelector('.mobile-fab');
-    const recipes = await api('/api/recipes').catch(() => []);
+    const recipes = await Client.listRecipes().catch(() => []);
 
     const menu = document.createElement('div');
     menu.id = 'fab-menu';
@@ -1318,14 +1288,14 @@ function openSpotlight(initialText) {
     // Cache recipes for slash hint
     let _cachedRecipes = null;
     async function getRecipes() {
-        if (!_cachedRecipes) _cachedRecipes = await api('/api/recipes').catch(() => []);
+        if (!_cachedRecipes) _cachedRecipes = await Client.listRecipes().catch(() => []);
         return _cachedRecipes;
     }
 
     // Cache tags
     let _cachedTags = null;
     async function getTags() {
-        if (!_cachedTags) _cachedTags = await api('/api/tags').catch(() => []);
+        if (!_cachedTags) _cachedTags = await Client.listTags().catch(() => []);
         return _cachedTags;
     }
 
@@ -1348,7 +1318,7 @@ function openSpotlight(initialText) {
     // Cache master values
     let _cachedValues = null;
     async function getValues() {
-        if (!_cachedValues) _cachedValues = await api('/api/master-values').catch(() => []);
+        if (!_cachedValues) _cachedValues = await Client.listValues().catch(() => []);
         return _cachedValues;
     }
 
@@ -1691,17 +1661,12 @@ function openSpotlight(initialText) {
             recipesHint.style.display = 'none';
             tagHintEl.style.display = 'none';
             try {
-                const resp = await fetch(API + '/api/ingest/text', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-                const data = await resp.json();
-                if (resp.ok) {
+                const { ok, data } = await Client.ingestText(payload);
+                if (ok) {
                     closeSpotlight();
                     location.hash = '#draft/' + data.queue_id;
                 } else {
-                    hint.textContent = 'Error: ' + (data.error || resp.statusText);
+                    hint.textContent = 'Error: ' + (data.error || 'unknown');
                     hint.style.color = 'var(--neg)';
                     input.removeAttribute('aria-disabled');
                     input.contentEditable = 'true';
@@ -1751,13 +1716,12 @@ function renderDraft(queueId) {
 
     async function poll() {
         try {
-            const resp = await fetch(API + '/api/ingest/text/' + queueId);
-            if (!resp.ok) {
+            const item = await Client.getDraft(queueId);
+            if (!item) {
                 document.getElementById('draft-content').innerHTML = `<p style="color:var(--neg)">Queue item not found.</p>`;
                 clearInterval(draftPollTimer);
                 return;
             }
-            const item = await resp.json();
             renderDraftContent(item, queueId);
         } catch (e) {
             document.getElementById('draft-content').innerHTML = `<p style="color:var(--neg)">Error: ${e.message}</p>`;
@@ -1769,7 +1733,7 @@ function renderDraft(queueId) {
 }
 
 async function dismissDraft(id) {
-    await fetch(API + '/api/ingest/text/' + id, { method: 'DELETE' });
+    await Client.dismissDraft(id);
     location.hash = '#ingestion';
 }
 
@@ -1906,22 +1870,11 @@ function renderDraftContent(item, queueId) {
                 const body = { full: true, tl, st, tags, values, r: item.recipe_u };
                 if (dt) body.dt = dt;
                 if (result.record_id) {
-                    // Record already created by worker — update it
-                    await api('/api/records/' + result.record_id, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body),
-                    });
+                    await Client.updateRecord(result.record_id, body);
                 } else {
-                    // Fallback: create new (shouldn't happen for done status)
-                    await api('/api/records', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body),
-                    });
+                    await Client.createRecord(body);
                 }
-                // Dismiss queue item after successful save
-                await api('/api/ingest/text/' + queueId, { method: 'DELETE' }).catch(() => {});
+                await Client.dismissDraft(queueId);
                 invalidateMasterCache();
                 el.innerHTML = `
                     <div class="draft-status">
@@ -1957,13 +1910,8 @@ function renderDraftContent(item, queueId) {
         document.querySelectorAll('#draft-choices button').forEach(btn => {
             btn.onclick = async () => {
                 const recipe = btn.dataset.recipe;
-                const resp = await fetch(API + '/api/ingest/text', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: item.payload, source: 'web', recipe_u: recipe }),
-                });
-                const data = await resp.json();
-                if (resp.ok) location.hash = '#draft/' + data.queue_id;
+                const { ok, data } = await Client.ingestText({ text: item.payload, source: 'web', recipe_u: recipe });
+                if (ok) location.hash = '#draft/' + data.queue_id;
             };
         });
         return;
@@ -2061,13 +2009,8 @@ function renderDraftContent(item, queueId) {
         document.getElementById('draft-resubmit').onclick = async () => {
             const extra = document.getElementById('draft-extra').value.trim();
             if (!extra) return;
-            const resp = await fetch(API + '/api/ingest/text', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: item.payload + '\n' + extra, source: 'web', recipe_u: item.recipe_u }),
-            });
-            const data = await resp.json();
-            if (resp.ok) location.hash = '#draft/' + data.queue_id;
+            const { ok, data } = await Client.ingestText({ text: item.payload + '\n' + extra, source: 'web', recipe_u: item.recipe_u });
+            if (ok) location.hash = '#draft/' + data.queue_id;
         };
 
         document.getElementById('draft-save').onclick = async () => {
@@ -2084,12 +2027,8 @@ function renderDraftContent(item, queueId) {
             if (!tl) { alert('Title required'); return; }
 
             try {
-                await api('/api/records', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tl, st: partial.st || 3, tags, values, r: item.recipe_u }),
-                });
-                await api('/api/ingest/text/' + queueId, { method: 'DELETE' }).catch(() => {});
+                await Client.createRecord({ tl, st: partial.st || 3, tags, values, r: item.recipe_u });
+                await Client.dismissDraft(queueId);
                 invalidateMasterCache();
                 clearInterval(draftPollTimer);
                 el.innerHTML = `
@@ -2237,9 +2176,9 @@ function invalidateMasterCache() { _masterCache = null; }
 async function fetchMasterData() {
     if (_masterCache) return _masterCache;
     const [tags, scopes, values] = await Promise.all([
-        api('/api/tags').catch(() => []),
-        api('/api/scopes').catch(() => []),
-        api('/api/master-values').catch(() => []),
+        Client.listTags().catch(() => []),
+        Client.listScopes().catch(() => []),
+        Client.listValues().catch(() => []),
     ]);
     _masterCache = { tags: tags || [], scopes: scopes || [], values: values || [] };
     return _masterCache;
@@ -2268,7 +2207,7 @@ function renderLogs() {
 
     const container = document.getElementById('log-container');
     document.getElementById('log-clear').onclick = () => { container.innerHTML = ''; };
-    logSource = new EventSource(API + '/api/logs/bot');
+    logSource = Client.botLogSource();
 
     logSource.onmessage = (e) => {
         const line = document.createElement('div');
@@ -2296,16 +2235,11 @@ function renderLogs() {
 // --- WebSocket ---
 
 function connectWS() {
-    const wsBase = API || location.origin;
-    const proto = wsBase.startsWith('https') ? 'wss:' : 'ws:';
-    const host = wsBase.replace(/^https?:\/\//, '');
-    const ws = new WebSocket(proto + '//' + host + '/ws');
-
-    ws.onmessage = () => {
+    const ws = Client.connectWS(() => {
         const hash = location.hash || '#dashboard';
         if (hash === '#records') renderRecords();
         if (hash === '#dashboard') renderDashboard();
-    };
+    });
     ws.onclose = () => setTimeout(connectWS, 2000);
 }
 connectWS();
@@ -2314,15 +2248,14 @@ connectWS();
 
 async function updateStatusDots() {
     const checks = [
-        { id: 'dot-server', url: API + '/api/health' },
-        { id: 'dot-bot', url: BOT_URL + '/health' },
-        { id: 'dot-web', url: '/health' },
-        { id: 'dot-mcp', url: API + '/api/mcp/probe' },
+        { id: 'dot-server', fn: Client.checkServer },
+        { id: 'dot-bot', fn: Client.checkBot },
+        { id: 'dot-mcp', fn: Client.checkMcp },
     ];
-    await Promise.all(checks.map(async ({ id, url }) => {
+    await Promise.all(checks.map(async ({ id, fn }) => {
         const dot = document.getElementById(id);
         if (!dot) return;
-        const result = await healthCheck(url);
+        const result = await fn();
         dot.className = 'status-dot ' + (result.status && result.status !== 'down' ? 'ok' : 'down');
     }));
 }

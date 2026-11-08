@@ -1,0 +1,7 @@
+:7601 {
+	root * cmd/web/static
+	file_server
+
+	reverse_proxy /api/* localhost:7600
+	reverse_proxy /ws localhost:7600
+}

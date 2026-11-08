@@ -28,7 +28,7 @@ cds-header-nav-item {
     --cds-text-secondary: var(--line);
     --cds-border-subtle-01: transparent;
 }
-cds-header-nav-item:hover { --cds-text-secondary: var(--paper); }
+cds-header-nav-item:hover { --cds-text-secondary: var(--paper); --cds-background-hover: var(--ink-2); }
 cds-header-nav-item[active] { --cds-text-secondary: var(--paper); --cds-border-interactive: var(--signal); }
 cds-header-name { --cds-text-primary: var(--paper); }
 
