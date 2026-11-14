@@ -13,6 +13,7 @@ type Record struct {
 	Status  int     `json:"st"`
 	Created string  `json:"ct"`
 	Recipe  *string `json:"r,omitempty"`
+	DoneAt  *string `json:"da,omitempty"`
 }
 
 type RecordValue struct {
@@ -216,8 +217,8 @@ func UpdateRecordStatus(db *sql.DB, id []byte, status int, info string) error {
 func GetRecord(db *sql.DB, id []byte) (*RecordFull, error) {
 	r := &RecordFull{}
 	err := db.QueryRow(
-		`SELECT id, tl, dt, st, ct, r FROM record WHERE id=?`, id,
-	).Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Recipe)
+		`SELECT id, tl, dt, st, ct, r, (SELECT MAX(at) FROM record_log rl WHERE rl.id=record.id AND rl.sst=3) FROM record WHERE id=?`, id,
+	).Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Recipe, &r.DoneAt)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +236,7 @@ type RecordFilter struct {
 }
 
 func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
-	query := `SELECT DISTINCT r.id, r.tl, r.dt, r.st, r.ct, r.r FROM record r`
+	query := `SELECT DISTINCT r.id, r.tl, r.dt, r.st, r.ct, r.r, (SELECT MAX(at) FROM record_log rl WHERE rl.id=r.id AND rl.sst=3) FROM record r`
 	var args []any
 	var where []string
 	var joins []string
@@ -294,7 +295,7 @@ func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
 	var records []RecordFull
 	for rows.Next() {
 		var r RecordFull
-		if err := rows.Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Recipe); err != nil {
+		if err := rows.Scan(&r.ID, &r.Title, &r.Detail, &r.Status, &r.Created, &r.Recipe, &r.DoneAt); err != nil {
 			return nil, err
 		}
 		records = append(records, r)

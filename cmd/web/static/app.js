@@ -207,7 +207,10 @@ function buildTodoChart(records) {
     records.forEach(r => {
         const day = (r.ct || '').slice(0, 10);
         if (added[day] !== undefined) added[day]++;
-        if (r.st === 3 && done[day] !== undefined) done[day]++;
+        if (r.st === 3) {
+            const doneDay = (r.da || r.ct || '').slice(0, 10);
+            if (done[doneDay] !== undefined) done[doneDay]++;
+        }
     });
 
     const addedVals = days.map(d => added[d]);
