@@ -111,43 +111,66 @@ func (w *Worker) processNext() {
 		return
 	}
 
-	log.Printf("processing queue item %d from %s", item.ID, item.Source)
+	log.Printf("[item:%d] ── START ── source=%s payload=%q", item.ID, item.Source, item.Payload)
 
-	// Phase 1: Resolve recipe
+	// ── Phase 1a: Resolve recipe ──
 	var recipeU string
 	if item.RecipeU != nil && *item.RecipeU != "" {
 		recipeU = *item.RecipeU
+		log.Printf("[item:%d] 1a/RECIPE hint=%s", item.ID, recipeU)
 	} else {
+		log.Printf("[item:%d] 1a/RECIPE no hint, classifying via LLM", item.ID)
 		resolved, ok := w.resolveRecipe(item)
 		if !ok {
-			return // ambiguous, no-match, or error — already handled
+			log.Printf("[item:%d] 1a/RECIPE STOP (ambiguous or error)", item.ID)
+			return
 		}
 		recipeU = resolved
+		if recipeU == "" {
+			log.Printf("[item:%d] 1a/RECIPE none matched, proceeding without", item.ID)
+		} else {
+			log.Printf("[item:%d] 1a/RECIPE resolved=%s", item.ID, recipeU)
+		}
 	}
 
-	// Phase 1 cont: Extract essential components
+	// ── Phase 1b+1c: Extract essential components ──
+	log.Printf("[item:%d] 1b/EXTRACT building state", item.ID)
 	state, err := w.buildExtractedState(item, recipeU)
 	if err != nil {
-		log.Printf("extract error for item %d: %v", item.ID, err)
+		log.Printf("[item:%d] 1b/EXTRACT ERROR: %v", item.ID, err)
 		db.MarkFailed(w.queueDB, item.ID, err.Error())
 		return
 	}
+	log.Printf("[item:%d] 1b/EXTRACT state: values=%v tags=%v free_tags=%v missing=%v",
+		item.ID, stateValuesDebug(state), stateTagsDebug(state), state.FreeTags, state.Missing)
 
-	// Phase 2 & 3: Generate title and description (always, even for drafts)
+	// ── Phase 2: Title ──
+	log.Printf("[item:%d] 2/TITLE generating", item.ID)
 	allTags, _ := db.ListTagsWithScope(w.mainDB)
 	tagLookup := buildTagLookup(allTags)
 	title := w.generateTitle(item, state, tagLookup)
+	log.Printf("[item:%d] 2/TITLE result=%q", item.ID, title)
+
+	// ── Phase 3: Description ──
+	log.Printf("[item:%d] 3/DESC generating", item.ID)
 	detail := w.generateDescription(item, state, tagLookup)
+	if detail != nil {
+		log.Printf("[item:%d] 3/DESC result=%q", item.ID, *detail)
+	} else {
+		log.Printf("[item:%d] 3/DESC result=nil", item.ID)
+	}
 
 	// Check for missing required fields → needs_input draft with title preview
 	if len(state.Missing) > 0 {
 		result := stateToResult(state, title, detail)
+		log.Printf("[item:%d] ── NEEDS_INPUT ── missing=%v", item.ID, state.Missing)
 		w.markNeedsInput(item, state, result)
 		return
 	}
 
 	// Finalize: check requirements and create record
 	result := stateToResult(state, title, detail)
+	log.Printf("[item:%d] ── FINALIZE ──", item.ID)
 	w.finalize(item, state.Recipe, result)
 }
 
@@ -183,12 +206,14 @@ Return empty matches array if none fit. Only return exact usecase keys from the 
 
 User text: %s`, recipeList.String(), item.Payload)
 
+	log.Printf("[LLM:match] item %d prompt:\n%s", item.ID, prompt)
 	resp, err := w.ollama.Generate(prompt)
 	if err != nil {
 		log.Printf("ollama match error for item %d: %v", item.ID, err)
 		db.MarkFailed(w.queueDB, item.ID, err.Error())
 		return "", false
 	}
+	log.Printf("[LLM:match] item %d response: %s", item.ID, resp)
 
 	var result matchResult
 	if err := json.Unmarshal([]byte(resp), &result); err != nil {
@@ -396,43 +421,71 @@ func (w *Worker) llmExtractMissing(item *db.QueueItem, recipe *db.RecipeFull, al
 		fmt.Fprintf(&ctx, "Recipe: %s — %s\n\n", recipe.Usecase, recipe.Description)
 	}
 
-	ctx.WriteString("Extract ONLY the following missing fields from the text:\n")
+	// Build structured extraction instructions per missing field
+	var valueMissing []string
+	var tagMissing []string
 	for _, m := range missing {
 		if strings.HasPrefix(m, "tag:") {
 			scopeName := strings.TrimPrefix(m, "tag:")
 			var scopeTags []string
 			for _, t := range allTags {
 				if t.ScopeName != nil && *t.ScopeName == scopeName {
-					scopeTags = append(scopeTags, t.Name)
+					if t.Desc != "" {
+						scopeTags = append(scopeTags, fmt.Sprintf("%s (%s)", t.Name, t.Desc))
+					} else {
+						scopeTags = append(scopeTags, t.Name)
+					}
 				}
 			}
-			fmt.Fprintf(&ctx, "- Tag from scope '%s' — choices: %s\n", scopeName, strings.Join(scopeTags, ", "))
+			tagMissing = append(tagMissing, fmt.Sprintf("scope '%s': pick ONE of [%s]. Return ONLY the slug (e.g. \"prime\", not \"SCB Prime\")", scopeName, strings.Join(scopeTags, ", ")))
 		} else {
 			desc := m
 			for _, mv := range masterVals {
 				if mv.Key == m {
-					desc = fmt.Sprintf("%s (%s)", mv.Key, mv.Desc)
+					desc = fmt.Sprintf("%s = %s", mv.Key, mv.Desc)
 					break
 				}
 			}
-			fmt.Fprintf(&ctx, "- Value: %s (number)\n", desc)
+			valueMissing = append(valueMissing, fmt.Sprintf("key \"%s\": %s — extract the numeric amount", m, desc))
 		}
 	}
 
-	prompt := fmt.Sprintf(`You are a data extraction assistant. Extract ONLY the specifically requested fields.
+	if len(valueMissing) > 0 {
+		ctx.WriteString("Required numeric values to extract:\n")
+		for _, v := range valueMissing {
+			fmt.Fprintf(&ctx, "  - %s\n", v)
+		}
+	}
+	if len(tagMissing) > 0 {
+		ctx.WriteString("Required tags to extract:\n")
+		for _, t := range tagMissing {
+			fmt.Fprintf(&ctx, "  - %s\n", t)
+		}
+	}
+
+	prompt := fmt.Sprintf(`You are a data extraction assistant.
 
 %s
-Return JSON only with these fields:
-- tags (string[]): tag names ONLY for the requested scopes — no # prefix, no scope prefix
-- values (object[]): each with "k" (value type key) and "v" (number) — only for requested values
-- missing (string[]): list any requested fields you could NOT find in the text
+From the user text below, extract ONLY the requested fields. Return JSON:
+{
+  "values": [{"k": "<exact key name from list above>", "v": <number>}],
+  "tags": ["<tag name>"],
+  "missing": ["<key or tag:scope for anything NOT found>"]
+}
+
+Rules:
+- For values: "k" MUST be the exact key name listed above (e.g. "spent", "token"). Do NOT invent keys.
+- For tags: return ONLY the tag name, no # prefix, no scope prefix.
+- Do NOT extract fields that were not requested.
 
 User text: %s`, ctx.String(), item.Payload)
 
+	log.Printf("[LLM:extract] item %d prompt:\n%s", item.ID, prompt)
 	resp, err := w.ollama.Generate(prompt)
 	if err != nil {
 		return nil, fmt.Errorf("ollama extract: %w", err)
 	}
+	log.Printf("[LLM:extract] item %d response: %s", item.ID, resp)
 
 	var result extractResult
 	if err := json.Unmarshal([]byte(resp), &result); err != nil {
@@ -498,12 +551,41 @@ func (w *Worker) llmSummarizeTitle(text string, state *extractedState, tagLookup
 		recipeCtx = fmt.Sprintf("Context: this is a '%s' record (%s).\n", state.Recipe.Usecase, state.Recipe.Description)
 	}
 
-	prompt := fmt.Sprintf(`Summarize the following text into a short title (max 80 chars). Return JSON only: {"tl": "the title"}
+	// Build list of essential fields to omit from title
+	var omit []string
+	for k, ev := range state.Values {
+		if ev.Essential {
+			omit = append(omit, fmt.Sprintf("%s (%.0f)", k, ev.V))
+		}
+	}
+	for scope, entry := range state.Tags {
+		if entry.Essential {
+			for _, slug := range entry.Tags {
+				if t, ok := tagLookup[slug]; ok && t.Desc != "" {
+					omit = append(omit, fmt.Sprintf("%s/%s (%s)", scope, slug, t.Desc))
+				} else {
+					omit = append(omit, fmt.Sprintf("%s/%s", scope, slug))
+				}
+			}
+		}
+	}
 
+	var omitCtx string
+	if len(omit) > 0 {
+		omitCtx = fmt.Sprintf(`The following info is ALREADY shown elsewhere in the UI — strip ALL references to them (amounts, numbers, names, abbreviations, anything related):
 %s
-Text: %s`, recipeCtx, cleaned)
+Keep ONLY the core activity/event. Example: "lunch with keith at sushiro paid 495 THB with SCB Prime" → "Lunch with Keith at Sushiro"
+`, strings.Join(omit, "\n"))
+	}
 
+	prompt := fmt.Sprintf(`Extract the core activity from the text as a short title (max 80 chars). Return JSON only: {"tl": "the title"}
+
+%s%s
+Text: %s`, recipeCtx, omitCtx, cleaned)
+
+	log.Printf("[LLM:title] prompt:\n%s", prompt)
 	resp, err := w.ollama.Generate(prompt)
+	log.Printf("[LLM:title] response: %s", resp)
 	if err != nil {
 		log.Printf("ollama title error: %v", err)
 		// Fallback: truncate cleaned text
@@ -903,4 +985,28 @@ func wordCount(s string) int {
 func normalizeWhitespace(s string) string {
 	fields := strings.Fields(s)
 	return strings.Join(fields, " ")
+}
+
+func stateValuesDebug(s *extractedState) string {
+	var parts []string
+	for k, ev := range s.Values {
+		ess := ""
+		if ev.Essential {
+			ess = "*"
+		}
+		parts = append(parts, fmt.Sprintf("%s%s=%.2f", k, ess, ev.V))
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
+}
+
+func stateTagsDebug(s *extractedState) string {
+	var parts []string
+	for scope, entry := range s.Tags {
+		ess := ""
+		if entry.Essential {
+			ess = "*"
+		}
+		parts = append(parts, fmt.Sprintf("%s%s=[%s]", scope, ess, strings.Join(entry.Tags, ",")))
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
 }
