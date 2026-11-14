@@ -199,6 +199,8 @@ tr.clickable { cursor: pointer; }
 #rf-values .btn-remove:hover, #rf-scopes .btn-remove:hover { background: var(--neg-lt); }
 
 #records-list { overflow: hidden; }
+.rec-search { padding: var(--s-3) var(--s-5); margin-bottom: var(--s-5); }
+.rec-search .tag-input { border: 1px solid var(--grid); background: var(--card); }
 .rec-tabs {
     display: flex; gap: var(--s-2); overflow-x: auto; -webkit-overflow-scrolling: touch;
     border-bottom: 1px solid var(--rule); margin-bottom: var(--s-5); padding-bottom: var(--s-2);

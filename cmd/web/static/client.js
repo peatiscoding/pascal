@@ -31,7 +31,7 @@ const Client = {
     checkMcp()     { return healthCheck(API + '/api/mcp/probe'); },
 
     // Records
-    listRecords()              { return api('/api/records'); },
+    listRecords(params)        { const q = params ? '?' + new URLSearchParams(params) : ''; return api('/api/records' + q); },
     createRecord(body)         { return api('/api/records', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); },
     updateRecord(hexId, body)  { return api('/api/records/' + hexId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); },
     deleteRecord(hexId)        { return api('/api/records/' + hexId, { method: 'DELETE' }); },

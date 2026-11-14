@@ -266,8 +266,8 @@ func ListRecords(db *sql.DB, f RecordFilter) ([]RecordFull, error) {
 		where = append(where, "r.ct <= ?")
 		args = append(args, *f.To)
 	}
-	// Default: hide done records older than 7 days
-	if f.Status == nil {
+	// Default: hide done records older than 7 days (skip when filtering by tag to show all usage)
+	if f.Status == nil && f.Tag == nil {
 		where = append(where, "(r.st != 3 OR r.ct >= datetime('now', '-7 days'))")
 	}
 

@@ -290,14 +290,31 @@ window.carouselNav = function(dir) {
 };
 
 let _activeRecordTab = null;
+let _recordTagFilter = null;
+let _recordTagInput = null;
 
 async function renderRecords() {
-    app.innerHTML = '<div id="records-tabs" class="rec-tabs"></div><div id="records-list">Loading...</div>';
+    app.innerHTML = '<div id="records-search" class="rec-search"></div><div id="records-tabs" class="rec-tabs"></div><div id="records-list">Loading...</div>';
     try {
+        const { tags: allTags } = await fetchMasterData();
+        const searchEl = document.getElementById('records-search');
+        const tagSugs = (allTags || []).map(t => ({
+            value: '#:' + t.t,
+            label: '#:' + t.t,
+            hint: t.scope_name || '',
+        }));
+        _recordTagInput = createTagInput(searchEl, tagSugs, _recordTagFilter ? ['#:' + _recordTagFilter] : [], {
+            single: true,
+            placeholder: 'Search (#:tag)',
+            onAdd(val) { _recordTagFilter = val.startsWith('#:') ? val.slice(2) : val; _activeRecordTab = null; renderRecords(); },
+            onRemove() { _recordTagFilter = null; _activeRecordTab = null; renderRecords(); },
+        });
+
+        const params = _recordTagFilter ? { tag: _recordTagFilter, limit: 10000 } : undefined;
         const [records, recipes, drafts] = await Promise.all([
-            Client.listRecords(),
+            Client.listRecords(params),
             Client.listRecipes().catch(() => []),
-            Client.listDrafts(),
+            _recordTagFilter ? Promise.resolve([]) : Client.listDrafts(),
         ]);
 
         // Build primary scope lookup
@@ -2181,7 +2198,7 @@ function createTagInput(container, suggestions, selected, opts = {}) {
 }
 
 // Fetch master data for autocomplete (cached, invalidated on record save)
-let _masterCache = null;
+var _masterCache = null;
 function invalidateMasterCache() { _masterCache = null; }
 async function fetchMasterData() {
     if (_masterCache) return _masterCache;
