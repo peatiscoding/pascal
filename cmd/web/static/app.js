@@ -1812,15 +1812,8 @@ function renderDraftContent(item, queueId) {
                 }
                 await Client.dismissDraft(queueId);
                 invalidateMasterCache();
-                el.innerHTML = `
-                    <div class="draft-status">
-                        <p style="color:var(--pos);font-weight:600">Record saved!</p>
-                        <div style="margin-top:var(--s-5)">
-                            <a href="#records" class="btn btn-secondary">View Records</a>
-                            <button class="btn btn-primary" style="margin-left:var(--s-4)" onclick="openSpotlight()">Log Another</button>
-                        </div>
-                    </div>
-                `;
+                if (item.recipe_u) _activeRecordTab = item.recipe_u;
+                location.hash = '#records';
             } catch (e) {
                 alert('Error: ' + e.message);
             }

@@ -373,53 +373,104 @@ CREATE INDEX idx_queue_status ON ingest_queue(status, created_at);
 - Returns `202` with `{"queue_id": 42}`.
 - Caller (e.g. bot) uses `queue_id` to track progress via WebSocket.
 
-### Worker Logic
+### Worker Logic — Unified 3-Phase Pipeline
 
-Single goroutine, polls every 500ms. Three processing paths based on text length and completeness of provided hints.
+Single goroutine, polls every 500ms. Every message flows through the same pipeline:
 
-**Threshold:** 250 characters.
+```
+Phase 1: EXTRACT — resolve recipe + required values/tags
+Phase 2: TITLE  — strip essentials, replace annotations, summarize
+Phase 3: DESC   — replace all annotations, generate description
+```
+
+#### Phase 1: Extract Essential Components
 
 ```
 pick next pending item from queue
 
-if recipe_u is NULL:
-    → match text against all recipes via Ollama
-    → 0 matches: extract without recipe context (see below)
-    → 1 match:  set recipe_u, fall through to extract
-    → N matches: set status "ambiguous", store matches in result,
-                 push WS event {type: "queue:ambiguous", id, matches}
+1a. RESOLVE RECIPE
+    if recipe_u is NULL:
+        → classify text against all recipes via Ollama
+        → 0 matches: proceed without recipe
+        → 1 match:  use as recipe_u
+        → N matches: set status "ambiguous", push WS event, STOP
 
-if recipe_u is set (or resolved from match):
+1b. BUILD EXTRACTED STATE
+    - Parse hint_tags / hint_values from queue item
+    - Load recipe requirements (recipe_values, recipe_scopes)
+    - Populate state from hints
+    - Mark each value/tag as "essential" if required by recipe at target status
+    - Find missing required fields
 
-    PATH A — Direct Create (no LLM):
-        condition: text < 250 chars AND all required scoped tags provided
-                   AND all required values provided via hint_values
-        action:    title = input text, status = recipe default,
-                   tags/values from hints → insert record immediately
-        use case:  "/expense Lunch @THB(200) #payment-source:cash"
-
-    PATH B — Partial Extract (targeted LLM):
-        condition: text < 250 chars AND some required tags/values missing
-        action:    LLM prompted to extract ONLY the missing fields
-                   (not title, not status — those come from text/recipe)
-                   result merged with hints → finalize
-        use case:  "/expense Lunch @THB(200)" (missing payment-source tag)
-
-    PATH C — Summarize (full LLM):
-        condition: text >= 250 chars
-        action:    LLM summarizes text → title (max 80 chars),
-                   original text → detail field,
-                   also extracts tags/values/status
-                   result merged with hints → finalize
-        use case:  long-form notes, meeting summaries, pasted content
-
-No recipe_u + short text: direct create (title = text, status = done)
-No recipe_u + long text:  summarize via LLM (same as PATH C)
+1c. LLM EXTRACT (conditional)
+    if missing fields exist:
+        → Ollama prompt: extract ONLY the missing tags/values
+        → Merge LLM result with hints (hints take precedence)
+        → Re-check missing after merge
+    if still missing → set "needs_input", push WS event, STOP
 ```
 
-### Finalize Step
+**Essential** = required by recipe at target status. Essential fields are displayed separately in the UI listing view, so they're redundant in the title.
 
-All three paths converge on finalize:
+Intermediate state after Phase 1:
+
+```json
+{
+    "input": "<raw annotated text>",
+    "recipe": "<recipe object>",
+    "status": 3,
+    "values": {
+        "THB": { "essential": true, "v": 200 }
+    },
+    "tags": {
+        "payment-source": { "essential": true, "tags": ["cash"] }
+    },
+    "free_tags": ["coffee"],
+    "missing": []
+}
+```
+
+#### Phase 2: Summarize Title
+
+1. Start with raw input text
+2. **Strip essential annotations** — remove `@key(v)` where key is essential, remove `#scope:tag` where scope is essential
+3. **Replace remaining annotations with readable text:**
+   - `@spent(30)` → `"spent 30"`
+   - `#payment-source:prime` → `"SCB Prime"` (use `tag.d` if non-empty, else slug)
+   - `#:cslp` → `"cslp"` (bare tag slug)
+4. If ≤5 words → use as-is, skip LLM
+5. If >5 words → LLM: "Summarize into short title (max 80 chars)"
+6. If ≥250 chars → always LLM summarize
+
+**Example:**
+```
+Raw:    "paid @THB(30) for coffee at #:cslp #:coffee #payment-source:prime"
+Recipe: expense (requires THB, payment-source)
+Essential: THB, payment-source
+
+After strip essential: "paid for coffee at #:cslp #:coffee"
+After replace:         "paid for coffee at cslp coffee"
+≤5 words? No (6 words) → LLM summarize
+Title:                 "Coffee at CSLP"
+```
+
+#### Phase 3: Generate Description
+
+1. Start with raw input text
+2. **Keep essentials** — do NOT strip them
+3. **Replace ALL annotations** with readable text (same rules as title)
+4. Short text → use as-is (no LLM)
+5. Long text (≥250 chars) → store original as `record.dt`
+
+**Example:**
+```
+Raw:    "paid @THB(30) for coffee at #:cslp #:coffee #payment-source:prime"
+After replace all: "paid THB 30 for coffee at cslp coffee SCB Prime"
+Short → use as-is
+```
+
+#### Finalize
+
 1. Strip scope prefixes from tags (`payment-source:cash` → `cash`)
 2. Check recipe required fields against final result
 3. If complete → create record, mark done, WS broadcast
@@ -458,14 +509,14 @@ Worker pushes queue status updates through the existing WebSocket hub. Events:
 
 ### Ollama Prompt Strategy
 
-Three prompt types, used depending on the processing path.
+Up to 3 conditional LLM calls per message, each narrowly scoped.
 
-**1. Recipe matching** (no `recipe_u`):
+**1. Recipe matching** (conditional: no `recipe_u`):
 ```
 You are a classifier. Given user text and available recipes, return which recipe(s) match.
 
 Available recipes:
-- track_spending: Track daily expenses with amount and payment method
+- expense: Track daily expenses with amount and payment method
 - meal_log: Log meals with calories and ingredients
 ...
 
@@ -475,31 +526,11 @@ Return empty matches if none fit.
 User text: {payload}
 ```
 
-**2. Summarize** (PATH C — long text ≥250 chars):
-```
-You are a data extraction assistant. The following text is long and needs summarization.
-
-Recipe: track_spending — Track daily expenses with amount and payment method
-Available tags: #payment-source:cash, #payment-source:card, ...
-
-Return JSON only with these fields:
-- tl (string): short title/summary (max 80 chars)
-- st (int): status 0=paused, 1=todo, 2=doing, 3=done
-- tags (string[]): tag names ONLY — no # prefix, no scope prefix
-- values (object[]): each with "k" (value type key) and "v" (number)
-- missing (string[]): list any REQUIRED fields you could not find
-
-User text: {payload}
-```
-
-Original text is stored as `record.dt` (detail). LLM output provides title + structured fields.
-Hint tags/values are merged into the LLM result after extraction.
-
-**3. Partial extract** (PATH B — short text, missing fields only):
+**2. Missing field extraction** (conditional: required fields not in hints):
 ```
 You are a data extraction assistant. Extract ONLY the specifically requested fields.
 
-Recipe: track_spending — Track daily expenses with amount and payment method
+Recipe: expense — Track daily expenses with amount and payment method
 
 Extract ONLY the following missing fields from the text:
 - Tag from scope 'payment-source' — choices: cash, card, prompt-pay
@@ -513,9 +544,17 @@ Return JSON only with these fields:
 User text: {payload}
 ```
 
-This prompt is narrowly scoped — it does NOT ask for title, detail, or status (those come from the input text and recipe defaults). Only the specific missing tags/values are requested.
+**3. Title summarization** (conditional: cleaned text >5 words or ≥250 chars):
+```
+Summarize the following text into a short title (max 80 chars).
+Return JSON only: {"tl": "the title"}
 
-**PATH A** (direct create) does not call Ollama at all.
+Context: this is a 'expense' record (Track daily expenses with amount and payment method).
+
+Text: {cleaned_text_with_essentials_stripped}
+```
+
+For short text (≤5 words after stripping essentials), the cleaned text is used directly as title — no LLM call.
 
 ## Web UI Spotlight — Inline Syntax
 

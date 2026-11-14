@@ -20,6 +20,7 @@ import (
 const (
 	pollInterval       = 500 * time.Millisecond
 	summarizeThreshold = 250
+	shortTitleMaxWords = 5
 )
 
 type Worker struct {
@@ -76,6 +77,30 @@ type needsInputResult struct {
 	Missing []string      `json:"missing,omitempty"`
 }
 
+// --- Extracted state: intermediate representation between phases ---
+
+type extractedValue struct {
+	Essential bool    // required by recipe at target status
+	V         float64 // numeric value
+}
+
+type extractedScopeTags struct {
+	Essential bool     // scope is required by recipe
+	Tags      []string // tag slugs within this scope
+}
+
+type extractedState struct {
+	Input    string                        // raw annotated text
+	Recipe   *db.RecipeFull                // resolved recipe (may be nil)
+	Status   int                           // target status
+	Values   map[string]extractedValue     // value key → {essential, v}
+	Tags     map[string]extractedScopeTags // scope name → {essential, [slugs]}
+	FreeTags []string                      // unscoped tags
+	Missing  []string                      // fields still missing after extraction
+}
+
+// --- Main pipeline ---
+
 func (w *Worker) processNext() {
 	item, err := db.DequeueNext(w.queueDB)
 	if err != nil {
@@ -88,30 +113,59 @@ func (w *Worker) processNext() {
 
 	log.Printf("processing queue item %d from %s", item.ID, item.Source)
 
+	// Phase 1: Resolve recipe
+	var recipeU string
 	if item.RecipeU != nil && *item.RecipeU != "" {
-		// Recipe known — go straight to extract
-		w.phaseExtract(item, *item.RecipeU)
+		recipeU = *item.RecipeU
 	} else {
-		// Phase 1: match recipe
-		w.phaseMatch(item)
+		resolved, ok := w.resolveRecipe(item)
+		if !ok {
+			return // ambiguous, no-match, or error — already handled
+		}
+		recipeU = resolved
 	}
-}
 
-func (w *Worker) phaseMatch(item *db.QueueItem) {
-	recipes, err := db.ListRecipesFull(w.mainDB)
+	// Phase 1 cont: Extract essential components
+	state, err := w.buildExtractedState(item, recipeU)
 	if err != nil {
-		log.Printf("list recipes error for item %d: %v", item.ID, err)
+		log.Printf("extract error for item %d: %v", item.ID, err)
 		db.MarkFailed(w.queueDB, item.ID, err.Error())
 		return
 	}
 
-	if len(recipes) == 0 {
-		// No recipes at all — extract without recipe context
-		w.extractNoRecipe(item)
+	// Phase 2 & 3: Generate title and description (always, even for drafts)
+	allTags, _ := db.ListTagsWithScope(w.mainDB)
+	tagLookup := buildTagLookup(allTags)
+	title := w.generateTitle(item, state, tagLookup)
+	detail := w.generateDescription(item, state, tagLookup)
+
+	// Check for missing required fields → needs_input draft with title preview
+	if len(state.Missing) > 0 {
+		result := stateToResult(state, title, detail)
+		w.markNeedsInput(item, state, result)
 		return
 	}
 
-	// Build recipe list for prompt
+	// Finalize: check requirements and create record
+	result := stateToResult(state, title, detail)
+	w.finalize(item, state.Recipe, result)
+}
+
+// resolveRecipe uses LLM to classify text against available recipes.
+// Returns (recipeU, true) on success, ("", true) for no-recipe processing,
+// or ("", false) if processing should stop (ambiguous/error).
+func (w *Worker) resolveRecipe(item *db.QueueItem) (string, bool) {
+	recipes, err := db.ListRecipesFull(w.mainDB)
+	if err != nil {
+		log.Printf("list recipes error for item %d: %v", item.ID, err)
+		db.MarkFailed(w.queueDB, item.ID, err.Error())
+		return "", false
+	}
+
+	if len(recipes) == 0 {
+		return "", true // no recipes in system — proceed without
+	}
+
 	var recipeList strings.Builder
 	for _, rc := range recipes {
 		fmt.Fprintf(&recipeList, "- %s: %s\n", rc.Usecase, rc.Description)
@@ -133,140 +187,199 @@ User text: %s`, recipeList.String(), item.Payload)
 	if err != nil {
 		log.Printf("ollama match error for item %d: %v", item.ID, err)
 		db.MarkFailed(w.queueDB, item.ID, err.Error())
-		return
+		return "", false
 	}
 
 	var result matchResult
 	if err := json.Unmarshal([]byte(resp), &result); err != nil {
 		log.Printf("parse match response for item %d: %v (raw: %s)", item.ID, err, resp)
-		// Ollama gave garbage — fall through to no-recipe extract
-		w.extractNoRecipe(item)
-		return
+		return "", true // garbage response — proceed without recipe
 	}
 
 	switch len(result.Matches) {
 	case 0:
-		w.extractNoRecipe(item)
+		return "", true
 	case 1:
-		w.phaseExtract(item, result.Matches[0])
+		return result.Matches[0], true
 	default:
-		// Ambiguous — store matches, let user pick
 		resultJSON, _ := json.Marshal(result)
 		if err := db.SetQueueResult(w.queueDB, item.ID, "ambiguous", string(resultJSON)); err != nil {
 			log.Printf("set ambiguous error for item %d: %v", item.ID, err)
 		}
 		w.hub.Broadcast(ws.Event{Type: "queue:ambiguous", ID: fmt.Sprintf("%d", item.ID)})
 		log.Printf("item %d ambiguous: %v", item.ID, result.Matches)
+		return "", false
 	}
 }
 
-func (w *Worker) phaseExtract(item *db.QueueItem, recipeU string) {
-	recipe, err := db.GetRecipe(w.mainDB, recipeU)
-	if err != nil {
-		log.Printf("get recipe %s for item %d: %v", recipeU, item.ID, err)
-		w.extractNoRecipe(item)
-		return
-	}
-
-	// Parse hints from queue item
+// buildExtractedState creates the intermediate extracted state from hints + optional LLM extraction.
+func (w *Worker) buildExtractedState(item *db.QueueItem, recipeU string) (*extractedState, error) {
 	hintTags, hintValues := parseHints(item)
-	tags, _ := db.ListTagsWithScope(w.mainDB)
+	allTags, _ := db.ListTagsWithScope(w.mainDB)
 
-	// Long text → always use LLM to summarize
-	if len(item.Payload) >= summarizeThreshold {
-		w.doSummarize(item, recipe, tags, hintTags, hintValues)
-		return
-	}
-
-	// Short text: check if all required tags+values are already provided
-	missing := findMissing(recipe, tags, hintTags, hintValues)
-	if len(missing) == 0 {
-		// Everything provided — direct create, no LLM
-		w.directCreate(item, recipe, hintTags, hintValues)
-		return
-	}
-
-	// Short text with missing fields — LLM extracts only what's missing
-	w.doPartialExtract(item, recipe, tags, hintTags, hintValues, missing)
-}
-
-func (w *Worker) extractNoRecipe(item *db.QueueItem) {
-	hintTags, hintValues := parseHints(item)
-	tags, _ := db.ListTagsWithScope(w.mainDB)
-
-	if len(item.Payload) >= summarizeThreshold {
-		w.doSummarize(item, nil, tags, hintTags, hintValues)
-		return
-	}
-
-	// No recipe = no required fields to check, but still need title extraction if ambiguous
-	// For short text without recipe, use text as title directly
-	w.directCreate(item, nil, hintTags, hintValues)
-}
-
-// parseHints extracts hint tags and values from queue item JSON columns.
-func parseHints(item *db.QueueItem) ([]string, []db.RecordValue) {
-	var hintTags []string
-	if item.HintTags != nil {
-		json.Unmarshal([]byte(*item.HintTags), &hintTags)
-	}
-	var hintValues []db.RecordValue
-	if item.HintValues != nil {
-		json.Unmarshal([]byte(*item.HintValues), &hintValues)
-	}
-	return hintTags, hintValues
-}
-
-// findMissing checks recipe requirements against provided hints.
-// Returns list of missing field descriptions.
-func findMissing(recipe *db.RecipeFull, allTags []db.TagWithScope, hintTags []string, hintValues []db.RecordValue) []string {
-	if recipe == nil {
-		return nil
-	}
-
-	targetSt := recipe.DefaultStatus
-	var missing []string
-
-	// Check required values
-	for _, rv := range recipe.Values {
-		if !statusIn(rv.RequiredAt, targetSt) {
-			continue
+	// Resolve recipe
+	var recipe *db.RecipeFull
+	if recipeU != "" {
+		r, err := db.GetRecipe(w.mainDB, recipeU)
+		if err != nil {
+			log.Printf("get recipe %s for item %d: %v", recipeU, item.ID, err)
+			// Continue without recipe
+		} else {
+			recipe = r
 		}
-		found := false
-		for _, hv := range hintValues {
-			if hv.Key == rv.MasterKey {
-				found = true
+	}
+
+	st := 3 // default done
+	if recipe != nil {
+		st = recipe.DefaultStatus
+	}
+
+	state := &extractedState{
+		Input:  item.Payload,
+		Recipe: recipe,
+		Status: st,
+		Values: make(map[string]extractedValue),
+		Tags:   make(map[string]extractedScopeTags),
+	}
+
+	// Populate from hints
+	for _, hv := range hintValues {
+		state.Values[hv.Key] = extractedValue{V: hv.Value}
+	}
+
+	// Resolve hint tags into scoped/unscoped buckets
+	for _, ht := range hintTags {
+		bare := bareTagName(ht)
+		if idx := strings.LastIndex(ht, ":"); idx >= 0 {
+			scopeName := ht[:idx]
+			entry := state.Tags[scopeName]
+			entry.Tags = append(entry.Tags, bare)
+			state.Tags[scopeName] = entry
+		} else {
+			// Try to resolve scope from allTags
+			resolved := false
+			for _, t := range allTags {
+				if t.Name == bare && t.ScopeName != nil {
+					entry := state.Tags[*t.ScopeName]
+					entry.Tags = append(entry.Tags, bare)
+					state.Tags[*t.ScopeName] = entry
+					resolved = true
+					break
+				}
+			}
+			if !resolved {
+				state.FreeTags = append(state.FreeTags, bare)
+			}
+		}
+	}
+
+	// Mark essentials based on recipe requirements
+	w.markEssentials(state)
+
+	// Find missing required fields
+	missing := findMissing(recipe, allTags, hintTags, hintValues)
+	if len(missing) == 0 {
+		return state, nil
+	}
+
+	// Try LLM extraction for missing fields
+	llmResult, err := w.llmExtractMissing(item, recipe, allTags, missing)
+	if err != nil {
+		// LLM failed — report what's missing
+		state.Missing = missing
+		return state, nil
+	}
+
+	// Merge LLM results into state (hints take precedence)
+	for _, lv := range llmResult.Values {
+		if _, exists := state.Values[lv.Key]; !exists {
+			state.Values[lv.Key] = extractedValue{V: lv.Value}
+		}
+	}
+	for _, lt := range llmResult.Tags {
+		lt = strings.TrimPrefix(lt, "#")
+		bare := bareTagName(lt)
+		// Resolve scope for LLM-extracted tags
+		for _, t := range allTags {
+			if t.Name == bare && t.ScopeName != nil {
+				entry := state.Tags[*t.ScopeName]
+				// Don't duplicate
+				found := false
+				for _, existing := range entry.Tags {
+					if existing == bare {
+						found = true
+						break
+					}
+				}
+				if !found {
+					entry.Tags = append(entry.Tags, bare)
+					state.Tags[*t.ScopeName] = entry
+				}
 				break
 			}
 		}
-		if !found {
+	}
+
+	// Re-mark essentials after merge
+	w.markEssentials(state)
+
+	// Re-check missing after LLM extraction
+	state.Missing = recheckMissing(state)
+
+	return state, nil
+}
+
+// markEssentials flags values and scoped tags as essential if required by recipe.
+func (w *Worker) markEssentials(state *extractedState) {
+	if state.Recipe == nil {
+		return
+	}
+
+	// Mark essential values
+	for _, rv := range state.Recipe.Values {
+		if !statusIn(rv.RequiredAt, state.Status) {
+			continue
+		}
+		if ev, ok := state.Values[rv.MasterKey]; ok {
+			ev.Essential = true
+			state.Values[rv.MasterKey] = ev
+		}
+	}
+
+	// Mark essential scopes
+	for _, sc := range state.Recipe.Scopes {
+		if !sc.Required {
+			continue
+		}
+		if entry, ok := state.Tags[sc.ScopeName]; ok {
+			entry.Essential = true
+			state.Tags[sc.ScopeName] = entry
+		}
+	}
+}
+
+// recheckMissing verifies recipe requirements against current state.
+func recheckMissing(state *extractedState) []string {
+	if state.Recipe == nil {
+		return nil
+	}
+
+	var missing []string
+
+	for _, rv := range state.Recipe.Values {
+		if !statusIn(rv.RequiredAt, state.Status) {
+			continue
+		}
+		if _, ok := state.Values[rv.MasterKey]; !ok {
 			missing = append(missing, rv.MasterKey)
 		}
 	}
 
-	// Check required scopes — hint tags may be "scope:tag" or bare "tag"
-	hintTagBare := make(map[string]bool)
-	hintTagScoped := make(map[string]string) // scope → tag
-	for _, ht := range hintTags {
-		bare := bareTagName(ht)
-		hintTagBare[bare] = true
-		if idx := strings.LastIndex(ht, ":"); idx >= 0 {
-			hintTagScoped[ht[:idx]] = bare
-		} else {
-			// Try to resolve scope from allTags
-			for _, t := range allTags {
-				if t.Name == bare && t.ScopeName != nil {
-					hintTagScoped[*t.ScopeName] = bare
-				}
-			}
-		}
-	}
-
-	for _, sc := range recipe.Scopes {
+	for _, sc := range state.Recipe.Scopes {
 		if !sc.Required {
 			continue
 		}
-		if _, ok := hintTagScoped[sc.ScopeName]; !ok {
+		if entry, ok := state.Tags[sc.ScopeName]; !ok || len(entry.Tags) == 0 {
 			missing = append(missing, "tag:"+sc.ScopeName)
 		}
 	}
@@ -274,104 +387,15 @@ func findMissing(recipe *db.RecipeFull, allTags []db.TagWithScope, hintTags []st
 	return missing
 }
 
-// directCreate writes a record without calling LLM.
-// Title = cleaned payload text, tags/values from hints.
-func (w *Worker) directCreate(item *db.QueueItem, recipe *db.RecipeFull, hintTags []string, hintValues []db.RecordValue) {
-	st := 3 // default done
-	if recipe != nil {
-		st = recipe.DefaultStatus
-	}
-
-	// Normalize tags to bare names for storage
-	bareTags := make([]string, len(hintTags))
-	for i, t := range hintTags {
-		bareTags[i] = bareTagName(t)
-	}
-
-	title := cleanAnnotations(item.Payload)
-	if title == "" {
-		title = item.Payload
-	}
-
-	result := extractResult{
-		Title:  title,
-		Status: st,
-		Tags:   bareTags,
-		Values: hintValues,
-	}
-
-	var recipeU *string
-	if recipe != nil {
-		recipeU = &recipe.Usecase
-	}
-
-	w.createRecord(item, result, recipeU)
-}
-
-// doSummarize calls LLM to summarize long text. Title = summary, detail = original.
-func (w *Worker) doSummarize(item *db.QueueItem, recipe *db.RecipeFull, allTags []db.TagWithScope, hintTags []string, hintValues []db.RecordValue) {
-	var ctx strings.Builder
-	if recipe != nil {
-		fmt.Fprintf(&ctx, "Recipe: %s — %s\n", recipe.Usecase, recipe.Description)
-	}
-	if len(allTags) > 0 {
-		tagStrs := make([]string, len(allTags))
-		for i, t := range allTags {
-			tagStrs[i] = t.FormatTagHash()
-		}
-		fmt.Fprintf(&ctx, "Available tags: %s\n", strings.Join(tagStrs, ", "))
-	}
-
-	statusHint := "Default 3 for completed actions, 1 for future tasks."
-	if recipe != nil {
-		statusHint = fmt.Sprintf("Use %d (recipe default) unless text clearly indicates otherwise.", recipe.DefaultStatus)
-	}
-
-	prompt := fmt.Sprintf(`You are a data extraction assistant. The following text is long and needs summarization.
-
-%s
-Return JSON only with these fields:
-- tl (string): short title/summary (max 80 chars)
-- st (int): status 0=paused, 1=todo, 2=doing, 3=done. %s
-- tags (string[]): tag names ONLY — no # prefix, no scope prefix
-- values (object[]): each with "k" (value type key) and "v" (number)
-- missing (string[]): list any REQUIRED fields you could not find
-
-User text: %s`, ctx.String(), statusHint, item.Payload)
-
-	resp, err := w.ollama.Generate(prompt)
-	if err != nil {
-		log.Printf("ollama summarize error for item %d: %v", item.ID, err)
-		db.MarkFailed(w.queueDB, item.ID, err.Error())
-		return
-	}
-
-	var result extractResult
-	if err := json.Unmarshal([]byte(resp), &result); err != nil {
-		log.Printf("parse summarize response for item %d: %v (raw: %s)", item.ID, err, resp)
-		db.MarkFailed(w.queueDB, item.ID, fmt.Sprintf("parse: %v", err))
-		return
-	}
-
-	// Set original text as detail
-	detail := item.Payload
-	result.Detail = &detail
-
-	// Merge hints
-	result.Tags = mergeTags(result.Tags, hintTags)
-	result.Values = mergeValues(result.Values, hintValues)
-
-	w.finalize(item, recipe, result, allTags)
-}
-
-// doPartialExtract calls LLM only to fill in missing tags/values.
-func (w *Worker) doPartialExtract(item *db.QueueItem, recipe *db.RecipeFull, allTags []db.TagWithScope, hintTags []string, hintValues []db.RecordValue, missing []string) {
+// llmExtractMissing calls Ollama to extract only the missing required fields.
+func (w *Worker) llmExtractMissing(item *db.QueueItem, recipe *db.RecipeFull, allTags []db.TagWithScope, missing []string) (*extractResult, error) {
 	masterVals, _ := db.ListMasterValues(w.mainDB)
 
 	var ctx strings.Builder
-	fmt.Fprintf(&ctx, "Recipe: %s — %s\n\n", recipe.Usecase, recipe.Description)
+	if recipe != nil {
+		fmt.Fprintf(&ctx, "Recipe: %s — %s\n\n", recipe.Usecase, recipe.Description)
+	}
 
-	// Only describe missing fields
 	ctx.WriteString("Extract ONLY the following missing fields from the text:\n")
 	for _, m := range missing {
 		if strings.HasPrefix(m, "tag:") {
@@ -407,43 +431,135 @@ User text: %s`, ctx.String(), item.Payload)
 
 	resp, err := w.ollama.Generate(prompt)
 	if err != nil {
-		log.Printf("ollama partial-extract error for item %d: %v", item.ID, err)
-		db.MarkFailed(w.queueDB, item.ID, err.Error())
-		return
+		return nil, fmt.Errorf("ollama extract: %w", err)
 	}
 
-	var llmResult extractResult
-	if err := json.Unmarshal([]byte(resp), &llmResult); err != nil {
-		log.Printf("parse partial-extract response for item %d: %v (raw: %s)", item.ID, err, resp)
-		db.MarkFailed(w.queueDB, item.ID, fmt.Sprintf("parse: %v", err))
-		return
+	var result extractResult
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+		return nil, fmt.Errorf("parse extract response: %w (raw: %s)", err, resp)
 	}
 
-	// Build full result: title from payload, merge all sources
-	st := recipe.DefaultStatus
-	allResultTags := mergeTags(llmResult.Tags, hintTags)
-	allResultValues := mergeValues(llmResult.Values, hintValues)
-
-	result := extractResult{
-		Title:   item.Payload,
-		Status:  st,
-		Tags:    allResultTags,
-		Values:  allResultValues,
-		Missing: llmResult.Missing,
-	}
-
-	w.finalize(item, recipe, result, allTags)
+	return &result, nil
 }
 
-// finalize checks for missing fields and either creates the record or marks needs_input.
-func (w *Worker) finalize(item *db.QueueItem, recipe *db.RecipeFull, result extractResult, _ []db.TagWithScope) {
-	// Strip scope prefixes from tags
-	for i, t := range result.Tags {
-		t = strings.TrimPrefix(t, "#")
-		if idx := strings.LastIndex(t, ":"); idx >= 0 {
-			t = t[idx+1:]
+// --- Phase 2: Title generation ---
+
+// generateTitle produces a title by stripping essential annotations and replacing the rest
+// with readable text, then optionally summarizing via LLM.
+func (w *Worker) generateTitle(item *db.QueueItem, state *extractedState, tagLookup map[string]db.TagWithScope) string {
+	text := state.Input
+
+	// For long text, use LLM to summarize
+	if len(text) >= summarizeThreshold {
+		return w.llmSummarizeTitle(text, state, tagLookup)
+	}
+
+	// Strip essential annotations from text
+	text = stripEssentialAnnotations(text, state)
+
+	// Replace remaining annotations with readable text
+	text = replaceAnnotationsReadable(text, tagLookup)
+
+	// Clean up whitespace
+	text = normalizeWhitespace(text)
+
+	if text == "" {
+		if state.Recipe != nil {
+			return state.Recipe.Description
 		}
-		result.Tags[i] = t
+		return state.Input
+	}
+
+	// Short text (≤5 words): use as-is
+	if wordCount(text) <= shortTitleMaxWords {
+		return text
+	}
+
+	// Longer text: LLM summarize
+	return w.llmSummarizeTitle(text, state, tagLookup)
+}
+
+// llmSummarizeTitle calls Ollama to generate a short title.
+func (w *Worker) llmSummarizeTitle(text string, state *extractedState, tagLookup map[string]db.TagWithScope) string {
+	// For long text, first strip essentials and replace annotations
+	cleaned := stripEssentialAnnotations(text, state)
+	cleaned = replaceAnnotationsReadable(cleaned, tagLookup)
+	cleaned = normalizeWhitespace(cleaned)
+
+	if cleaned == "" {
+		if state.Recipe != nil {
+			return state.Recipe.Description
+		}
+		return text
+	}
+
+	var recipeCtx string
+	if state.Recipe != nil {
+		recipeCtx = fmt.Sprintf("Context: this is a '%s' record (%s).\n", state.Recipe.Usecase, state.Recipe.Description)
+	}
+
+	prompt := fmt.Sprintf(`Summarize the following text into a short title (max 80 chars). Return JSON only: {"tl": "the title"}
+
+%s
+Text: %s`, recipeCtx, cleaned)
+
+	resp, err := w.ollama.Generate(prompt)
+	if err != nil {
+		log.Printf("ollama title error: %v", err)
+		// Fallback: truncate cleaned text
+		if len(cleaned) > 80 {
+			return cleaned[:77] + "..."
+		}
+		return cleaned
+	}
+
+	var result struct {
+		Title string `json:"tl"`
+	}
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+		log.Printf("parse title response: %v (raw: %s)", err, resp)
+		if len(cleaned) > 80 {
+			return cleaned[:77] + "..."
+		}
+		return cleaned
+	}
+
+	if result.Title == "" {
+		return cleaned
+	}
+	return result.Title
+}
+
+// --- Phase 3: Description generation ---
+
+// generateDescription produces a description by replacing ALL annotations with readable text.
+// For short text, returns as-is. For long text, stores original.
+func (w *Worker) generateDescription(item *db.QueueItem, state *extractedState, tagLookup map[string]db.TagWithScope) *string {
+	text := state.Input
+
+	// Long text: store original as detail (existing behavior)
+	if len(text) >= summarizeThreshold {
+		return &text
+	}
+
+	// Replace ALL annotations (including essentials) with readable text
+	desc := replaceAnnotationsReadable(text, tagLookup)
+	desc = normalizeWhitespace(desc)
+
+	if desc == "" {
+		return nil
+	}
+
+	return &desc
+}
+
+// --- Finalize and create record ---
+
+// finalize checks for missing fields and either creates the record or marks needs_input.
+func (w *Worker) finalize(item *db.QueueItem, recipe *db.RecipeFull, result extractResult) {
+	// Strip # prefix but keep scope:tag format for insertTagsExclusive
+	for i, t := range result.Tags {
+		result.Tags[i] = strings.TrimPrefix(t, "#")
 	}
 
 	hasMissing := len(result.Missing) > 0
@@ -494,6 +610,19 @@ func (w *Worker) finalize(item *db.QueueItem, recipe *db.RecipeFull, result extr
 	w.createRecord(item, result, recipeU)
 }
 
+func (w *Worker) markNeedsInput(item *db.QueueItem, state *extractedState, result extractResult) {
+	niResult := needsInputResult{
+		Partial: result,
+		Missing: state.Missing,
+	}
+	resultJSON, _ := json.Marshal(niResult)
+	if err := db.SetQueueResult(w.queueDB, item.ID, "needs_input", string(resultJSON)); err != nil {
+		log.Printf("set needs_input error for item %d: %v", item.ID, err)
+	}
+	w.hub.Broadcast(ws.Event{Type: "queue:needs_input", ID: fmt.Sprintf("%d", item.ID)})
+	log.Printf("item %d needs_input, missing: %v", item.ID, state.Missing)
+}
+
 // createRecord inserts a record into the main DB and marks the queue item done.
 func (w *Worker) createRecord(item *db.QueueItem, result extractResult, recipeU *string) {
 	id, err := uuid.NewV7()
@@ -536,18 +665,187 @@ func (w *Worker) createRecord(item *db.QueueItem, result extractResult, recipeU 
 	log.Printf("processed item %d -> record %x", item.ID, record.ID)
 }
 
+// --- Annotation processing ---
+
+var reTagCapture = regexp.MustCompile(`#([a-zA-Z0-9_-]*:)?([a-zA-Z0-9_-]+)`)
+var reValueCapture = regexp.MustCompile(`@([a-zA-Z0-9_-]+)\(([^)]*)\)`)
+var reTag = regexp.MustCompile(`#[a-zA-Z0-9_:-]+\s*`)
+var reValueFull = regexp.MustCompile(`@[a-zA-Z0-9_-]+\([^)]*\)\s*`)
+var reValueBare = regexp.MustCompile(`@[a-zA-Z0-9_-]*\s*`)
+
+// stripEssentialAnnotations removes annotations for essential (recipe-required) values and tags.
+func stripEssentialAnnotations(text string, state *extractedState) string {
+	// Strip essential value annotations: @key(v) where key is essential
+	text = reValueCapture.ReplaceAllStringFunc(text, func(match string) string {
+		sub := reValueCapture.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		key := sub[1]
+		if ev, ok := state.Values[key]; ok && ev.Essential {
+			return "" // strip essential
+		}
+		return match
+	})
+
+	// Strip essential tag annotations: #scope:tag where scope is essential
+	text = reTagCapture.ReplaceAllStringFunc(text, func(match string) string {
+		sub := reTagCapture.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		scopePart := strings.TrimSuffix(sub[1], ":")
+		if scopePart != "" {
+			if entry, ok := state.Tags[scopePart]; ok && entry.Essential {
+				return "" // strip essential scoped tag
+			}
+		}
+		return match
+	})
+
+	return text
+}
+
+// replaceAnnotationsReadable replaces remaining annotation tokens with human-readable text.
+// @key(v) → "key v", #scope:tag → tag display name, #tag → tag display name
+func replaceAnnotationsReadable(text string, tagLookup map[string]db.TagWithScope) string {
+	// Replace @key(v) → "key v"
+	text = reValueCapture.ReplaceAllStringFunc(text, func(match string) string {
+		sub := reValueCapture.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		return sub[1] + " " + sub[2]
+	})
+
+	// Replace #scope:tag or #tag → display name
+	text = reTagCapture.ReplaceAllStringFunc(text, func(match string) string {
+		sub := reTagCapture.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		tagSlug := sub[2]
+		if t, ok := tagLookup[tagSlug]; ok {
+			return t.DisplayName()
+		}
+		return tagSlug
+	})
+
+	// Clean bare @key (no parens)
+	text = reValueBare.ReplaceAllString(text, "")
+
+	return text
+}
+
 // --- Helpers ---
+
+// stateToResult converts extractedState into extractResult for storage.
+func stateToResult(state *extractedState, title string, detail *string) extractResult {
+	var tags []string
+	for scope, entry := range state.Tags {
+		for _, slug := range entry.Tags {
+			tags = append(tags, scope+":"+slug) // preserve scope:tag for insertTagsExclusive
+		}
+	}
+	tags = append(tags, state.FreeTags...)
+
+	var values []db.RecordValue
+	for k, ev := range state.Values {
+		values = append(values, db.RecordValue{Key: k, Value: ev.V})
+	}
+
+	return extractResult{
+		Title:   title,
+		Detail:  detail,
+		Status:  state.Status,
+		Tags:    tags,
+		Values:  values,
+		Missing: state.Missing,
+	}
+}
+
+// buildTagLookup creates a map from tag slug → TagWithScope for display name resolution.
+func buildTagLookup(tags []db.TagWithScope) map[string]db.TagWithScope {
+	m := make(map[string]db.TagWithScope, len(tags))
+	for _, t := range tags {
+		m[t.Name] = t
+	}
+	return m
+}
+
+// parseHints extracts hint tags and values from queue item JSON columns.
+func parseHints(item *db.QueueItem) ([]string, []db.RecordValue) {
+	var hintTags []string
+	if item.HintTags != nil {
+		json.Unmarshal([]byte(*item.HintTags), &hintTags)
+	}
+	var hintValues []db.RecordValue
+	if item.HintValues != nil {
+		json.Unmarshal([]byte(*item.HintValues), &hintValues)
+	}
+	return hintTags, hintValues
+}
+
+// findMissing checks recipe requirements against provided hints.
+func findMissing(recipe *db.RecipeFull, allTags []db.TagWithScope, hintTags []string, hintValues []db.RecordValue) []string {
+	if recipe == nil {
+		return nil
+	}
+
+	targetSt := recipe.DefaultStatus
+	var missing []string
+
+	for _, rv := range recipe.Values {
+		if !statusIn(rv.RequiredAt, targetSt) {
+			continue
+		}
+		found := false
+		for _, hv := range hintValues {
+			if hv.Key == rv.MasterKey {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, rv.MasterKey)
+		}
+	}
+
+	hintTagScoped := make(map[string]string)
+	for _, ht := range hintTags {
+		bare := bareTagName(ht)
+		if idx := strings.LastIndex(ht, ":"); idx >= 0 {
+			hintTagScoped[ht[:idx]] = bare
+		} else {
+			for _, t := range allTags {
+				if t.Name == bare && t.ScopeName != nil {
+					hintTagScoped[*t.ScopeName] = bare
+				}
+			}
+		}
+	}
+
+	for _, sc := range recipe.Scopes {
+		if !sc.Required {
+			continue
+		}
+		if _, ok := hintTagScoped[sc.ScopeName]; !ok {
+			missing = append(missing, "tag:"+sc.ScopeName)
+		}
+	}
+
+	return missing
+}
 
 // mergeTags combines LLM-extracted tags with hint tags, deduplicating by bare name.
 func mergeTags(llmTags []string, hintTags []string) []string {
 	if len(hintTags) == 0 {
 		return llmTags
 	}
-	hintMap := make(map[string]string) // bareName → full hint string
+	hintMap := make(map[string]string)
 	for _, h := range hintTags {
 		hintMap[bareTagName(h)] = h
 	}
-	// Replace matching LLM tags with hint version
 	for i, t := range llmTags {
 		bare := bareTagName(strings.TrimPrefix(t, "#"))
 		if h, ok := hintMap[bare]; ok {
@@ -555,7 +853,6 @@ func mergeTags(llmTags []string, hintTags []string) []string {
 			delete(hintMap, bare)
 		}
 	}
-	// Append remaining hints
 	for _, h := range hintMap {
 		llmTags = append(llmTags, h)
 	}
@@ -583,18 +880,6 @@ func mergeValues(llmValues []db.RecordValue, hintValues []db.RecordValue) []db.R
 	return llmValues
 }
 
-var reTag = regexp.MustCompile(`#[a-zA-Z0-9_:-]+\s*`)
-var reValueFull = regexp.MustCompile(`@[a-zA-Z0-9_-]+\([^)]*\)\s*`)
-var reValueBare = regexp.MustCompile(`@[a-zA-Z0-9_-]*\s*`)
-
-// cleanAnnotations strips #tag and @value(...) tokens from text for display as title.
-func cleanAnnotations(s string) string {
-	s = reTag.ReplaceAllString(s, "")
-	s = reValueFull.ReplaceAllString(s, "")
-	s = reValueBare.ReplaceAllString(s, "")
-	return strings.TrimSpace(s)
-}
-
 func bareTagName(t string) string {
 	if idx := strings.LastIndex(t, ":"); idx >= 0 {
 		return t[idx+1:]
@@ -609,4 +894,13 @@ func statusIn(statuses []int, st int) bool {
 		}
 	}
 	return false
+}
+
+func wordCount(s string) int {
+	return len(strings.Fields(s))
+}
+
+func normalizeWhitespace(s string) string {
+	fields := strings.Fields(s)
+	return strings.Join(fields, " ")
 }

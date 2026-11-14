@@ -141,11 +141,12 @@ func SetQueueResult(db *sql.DB, id int, status, result string) error {
 
 type TagWithScope struct {
 	Name      string
+	Desc      string  // tag.d — display name / description
 	ScopeName *string
 }
 
 func ListTagsWithScope(db *sql.DB) ([]TagWithScope, error) {
-	rows, err := db.Query(`SELECT t.t, s.name FROM tag t LEFT JOIN scope s ON t.s = s.id ORDER BY t.t`)
+	rows, err := db.Query(`SELECT t.t, t.d, s.name FROM tag t LEFT JOIN scope s ON t.s = s.id ORDER BY t.t`)
 	if err != nil {
 		return nil, err
 	}
@@ -153,12 +154,20 @@ func ListTagsWithScope(db *sql.DB) ([]TagWithScope, error) {
 	var tags []TagWithScope
 	for rows.Next() {
 		var t TagWithScope
-		if err := rows.Scan(&t.Name, &t.ScopeName); err != nil {
+		if err := rows.Scan(&t.Name, &t.Desc, &t.ScopeName); err != nil {
 			return nil, err
 		}
 		tags = append(tags, t)
 	}
 	return tags, nil
+}
+
+// DisplayName returns tag.d if non-empty, otherwise the slug.
+func (t TagWithScope) DisplayName() string {
+	if t.Desc != "" {
+		return t.Desc
+	}
+	return t.Name
 }
 
 // FormatTagHash returns #tag or #scope:tag for prompt display.
