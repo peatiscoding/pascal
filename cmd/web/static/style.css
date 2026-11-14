@@ -516,15 +516,32 @@ tr.clickable { cursor: pointer; }
 .tag-dropdown-item:hover, .tag-dropdown-item.active { background: var(--mod-stat-lt); }
 .tag-dropdown-item .hint { color: var(--ink-4); font-family: var(--font-mono); font-size: var(--fs-0); }
 
-/* Value row (key autocomplete + number) */
-.value-row { display: flex; gap: var(--s-4); align-items: center; margin-bottom: var(--s-3); }
-.value-row .tag-input { flex: 1; }
-.value-row input[type="number"] {
-    width: 110px; min-height: 44px; padding: var(--s-4); text-align: right;
-    border: 1px solid var(--line-2); border-radius: var(--r-2);
-    font-size: var(--fs-1); font-family: var(--font-mono); font-variant-numeric: tabular-nums; background: var(--card);
+/* Value row (key + number fieldset) */
+.value-row { display: flex; gap: var(--s-3); align-items: center; margin-bottom: var(--s-3); position: relative; }
+.value-key {
+    flex: 2; min-width: 0; min-height: 44px; padding: var(--s-4); border: 1px solid var(--line-2);
+    border-radius: var(--r-2); font-size: var(--fs-2); font-family: var(--font-mono);
+    background: var(--card); color: var(--ink);
 }
-.value-row input[type="number"]:focus { outline: var(--focus); outline-offset: 1px; }
+.value-num {
+    flex: 1; min-width: 0; min-height: 44px; padding: var(--s-4); text-align: right;
+    border: 1px solid var(--line-2); border-radius: var(--r-2);
+    font-size: var(--fs-2); font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    background: var(--card); color: var(--ink);
+}
+.value-key:focus, .value-num:focus { outline: var(--focus); outline-offset: 1px; }
+.value-key::placeholder, .value-num::placeholder { color: var(--ink-4); }
+.value-dropdown {
+    position: absolute; top: 100%; left: 0; right: var(--s-8); z-index: 10;
+    background: var(--card); border: 1px solid var(--line-2); border-radius: var(--r-2);
+    max-height: 200px; overflow-y: auto; box-shadow: 0 2px 8px rgba(0,0,0,.12);
+}
+.value-dropdown-item {
+    padding: var(--s-3) var(--s-4); cursor: pointer; font-size: var(--fs-1);
+    font-family: var(--font-mono); display: flex; justify-content: space-between; align-items: center;
+}
+.value-dropdown-item:hover, .value-dropdown-item.active { background: var(--mod-stat-lt); }
+.value-dropdown-hint { color: var(--ink-4); font-size: var(--fs-0); font-family: var(--font-sans); margin-left: var(--s-4); }
 
 /* Empty state (∅) */
 .empty {

@@ -487,34 +487,8 @@ function showRecordDetail(r) {
         const valSugs = master.values.map(v => ({ value: v.k, label: v.k, hint: v.d }));
         const valContainer = document.getElementById('rd-values');
 
-        function addValueRow(k, v) {
-            const row = document.createElement('div');
-            row.className = 'value-row';
-            const keyBox = document.createElement('div');
-            keyBox.style.flex = '1';
-            const numInput = document.createElement('input');
-            numInput.type = 'number';
-            numInput.placeholder = '0';
-            numInput.value = v ?? '';
-            const removeBtn = document.createElement('button');
-            removeBtn.type = 'button';
-            removeBtn.className = 'btn-remove';
-            removeBtn.textContent = '\u00d7';
-            row.appendChild(keyBox);
-            row.appendChild(numInput);
-            row.appendChild(removeBtn);
-            valContainer.appendChild(row);
-
-            const keyCtrl = createTagInput(keyBox, valSugs, k ? [k] : [], {
-                single: true, placeholder: 'Value key...'
-            });
-            const entry = { keyCtrl, numInput, removed: false };
-            valueRows.push(entry);
-            removeBtn.onclick = () => { row.remove(); entry.removed = true; };
-        }
-
-        (r.values || []).forEach(v => addValueRow(v.k, v.v));
-        document.getElementById('rd-add-value').onclick = () => addValueRow('', '');
+        (r.values || []).forEach(v => addValueRow(valContainer, valSugs, valueRows, v.k, v.v));
+        document.getElementById('rd-add-value').onclick = () => addValueRow(valContainer, valSugs, valueRows, '', '');
     });
 
     document.getElementById('record-detail-delete').onclick = () => deleteRecord(r);
@@ -524,13 +498,7 @@ function showRecordDetail(r) {
         const dt = document.getElementById('rd-dt').value.trim();
         const st = parseInt(document.getElementById('rd-st').dataset.value);
         const tags = tagInput ? tagInput.getSelected() : [];
-        const values = [];
-        valueRows.forEach(vr => {
-            if (vr.removed) return;
-            const k = vr.keyCtrl.getSelected()[0] || '';
-            const v = parseFloat(vr.numInput.value);
-            if (k && !isNaN(v)) values.push({ k, v });
-        });
+        const values = collectValues(valueRows);
 
         if (!tl) { alert('Title required'); return; }
 
@@ -1821,34 +1789,8 @@ function renderDraftContent(item, queueId) {
             const valSugs = master.values.map(v => ({ value: v.k, label: v.k, hint: v.d }));
             const valContainer = document.getElementById('draft-done-values');
 
-            function addValueRow(k, v) {
-                const row = document.createElement('div');
-                row.className = 'value-row';
-                const keyBox = document.createElement('div');
-                keyBox.style.flex = '1';
-                const numInput = document.createElement('input');
-                numInput.type = 'number';
-                numInput.placeholder = '0';
-                numInput.value = v || '';
-                const removeBtn = document.createElement('button');
-                removeBtn.type = 'button';
-                removeBtn.className = 'btn-remove';
-                removeBtn.textContent = '\u00d7';
-                row.appendChild(keyBox);
-                row.appendChild(numInput);
-                row.appendChild(removeBtn);
-                valContainer.appendChild(row);
-
-                const keyCtrl = createTagInput(keyBox, valSugs, k ? [k] : [], {
-                    single: true, placeholder: 'Value key...'
-                });
-                const entry = { keyCtrl, numInput, removed: false };
-                valueRows.push(entry);
-                removeBtn.onclick = () => { row.remove(); entry.removed = true; };
-            }
-
-            (result.values || []).forEach(v => addValueRow(v.k, v.v));
-            document.getElementById('draft-done-add-value').onclick = () => addValueRow('', '');
+            (result.values || []).forEach(v => addValueRow(valContainer, valSugs, valueRows, v.k, v.v));
+            document.getElementById('draft-done-add-value').onclick = () => addValueRow(valContainer, valSugs, valueRows, '', '');
         });
 
         document.getElementById('draft-done-save').onclick = async () => {
@@ -1856,13 +1798,7 @@ function renderDraftContent(item, queueId) {
             const dt = document.getElementById('draft-done-dt').value.trim();
             const st = parseInt(document.getElementById('draft-done-st').value);
             const tags = tagInput ? tagInput.getSelected() : [];
-            const values = [];
-            valueRows.forEach(vr => {
-                if (vr.removed) return;
-                const k = vr.keyCtrl.getSelected()[0] || '';
-                const v = parseFloat(vr.numInput.value);
-                if (k && !isNaN(v)) values.push({ k, v });
-            });
+            const values = collectValues(valueRows);
 
             if (!tl) { alert('Title required'); return; }
 
@@ -1976,34 +1912,8 @@ function renderDraftContent(item, queueId) {
             const valSugs = master.values.map(v => ({ value: v.k, label: v.k, hint: v.d }));
             const valContainer = document.getElementById('draft-values');
 
-            function addValueRow(k, v) {
-                const row = document.createElement('div');
-                row.className = 'value-row';
-                const keyBox = document.createElement('div');
-                keyBox.style.flex = '1';
-                const numInput = document.createElement('input');
-                numInput.type = 'number';
-                numInput.placeholder = '0';
-                numInput.value = v || '';
-                const removeBtn = document.createElement('button');
-                removeBtn.type = 'button';
-                removeBtn.className = 'btn-remove';
-                removeBtn.textContent = '\u00d7';
-                row.appendChild(keyBox);
-                row.appendChild(numInput);
-                row.appendChild(removeBtn);
-                valContainer.appendChild(row);
-
-                const keyCtrl = createTagInput(keyBox, valSugs, k ? [k] : [], {
-                    single: true, placeholder: 'Value key...'
-                });
-                const entry = { keyCtrl, numInput, removed: false };
-                valueRows.push(entry);
-                removeBtn.onclick = () => { row.remove(); entry.removed = true; };
-            }
-
-            (partial.values || []).forEach(v => addValueRow(v.k, v.v));
-            document.getElementById('draft-add-value').onclick = () => addValueRow('', '');
+            (partial.values || []).forEach(v => addValueRow(valContainer, valSugs, valueRows, v.k, v.v));
+            document.getElementById('draft-add-value').onclick = () => addValueRow(valContainer, valSugs, valueRows, '', '');
         });
 
         document.getElementById('draft-resubmit').onclick = async () => {
@@ -2016,13 +1926,7 @@ function renderDraftContent(item, queueId) {
         document.getElementById('draft-save').onclick = async () => {
             const tl = document.getElementById('draft-tl').value.trim();
             const tags = tagInput ? tagInput.getSelected() : [];
-            const values = [];
-            valueRows.forEach(vr => {
-                if (vr.removed) return;
-                const k = vr.keyCtrl.getSelected()[0] || '';
-                const v = parseFloat(vr.numInput.value);
-                if (k && !isNaN(v)) values.push({ k, v });
-            });
+            const values = collectValues(valueRows);
 
             if (!tl) { alert('Title required'); return; }
 
@@ -2046,6 +1950,119 @@ function renderDraftContent(item, queueId) {
         };
         return;
     }
+}
+
+// --- Value Input Component ---
+// Two inputs in a fieldset: key (text + autocomplete) + number.
+// valSugs: [{value, label, hint?}], returns {get(), removed} entry.
+
+function addValueRow(container, valSugs, valueRows, k, v) {
+    const row = document.createElement('div');
+    row.className = 'value-row';
+
+    const keyInput = document.createElement('input');
+    keyInput.type = 'text';
+    keyInput.className = 'value-key';
+    keyInput.placeholder = 'key';
+    if (k) keyInput.value = k;
+
+    const numInput = document.createElement('input');
+    numInput.type = 'number';
+    numInput.className = 'value-num';
+    numInput.inputMode = 'decimal';
+    numInput.placeholder = '0';
+    numInput.step = 'any';
+    if (v != null && v !== '') numInput.value = v;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn-remove';
+    removeBtn.textContent = '\u00d7';
+
+    row.appendChild(keyInput);
+    row.appendChild(numInput);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+
+    // Autocomplete for key
+    let dropdown = null;
+    let activeIdx = -1;
+
+    function hideDropdown() {
+        if (dropdown) { dropdown.remove(); dropdown = null; }
+        activeIdx = -1;
+    }
+
+    function showDropdown(filter) {
+        hideDropdown();
+        const matches = valSugs.filter(s =>
+            s.value.toLowerCase().startsWith(filter.toLowerCase())
+        ).slice(0, 8);
+        if (!matches.length) return;
+
+        dropdown = document.createElement('div');
+        dropdown.className = 'value-dropdown';
+        matches.forEach((s, i) => {
+            const opt = document.createElement('div');
+            opt.className = 'value-dropdown-item';
+            opt.textContent = s.value;
+            if (s.hint) {
+                const hint = document.createElement('span');
+                hint.className = 'value-dropdown-hint';
+                hint.textContent = s.hint;
+                opt.appendChild(hint);
+            }
+            opt.onmousedown = (e) => {
+                e.preventDefault();
+                keyInput.value = s.value;
+                hideDropdown();
+                numInput.focus();
+            };
+            dropdown.appendChild(opt);
+        });
+        row.appendChild(dropdown);
+    }
+
+    keyInput.addEventListener('input', () => {
+        const text = keyInput.value.trim();
+        if (text.length > 0) showDropdown(text);
+        else hideDropdown();
+    });
+
+    keyInput.addEventListener('keydown', (e) => {
+        if (!dropdown) return;
+        const items = dropdown.querySelectorAll('.value-dropdown-item');
+        if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, items.length - 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); }
+        else if ((e.key === 'Tab' || e.key === 'Enter') && activeIdx >= 0) {
+            e.preventDefault();
+            items[activeIdx]?.onmousedown(e);
+            return;
+        } else return;
+        items.forEach((it, i) => it.classList.toggle('active', i === activeIdx));
+    });
+
+    keyInput.addEventListener('blur', () => setTimeout(hideDropdown, 150));
+
+    const entry = {
+        get() {
+            return { k: keyInput.value.trim(), v: parseFloat(numInput.value) };
+        },
+        removed: false
+    };
+    valueRows.push(entry);
+    removeBtn.onclick = () => { row.remove(); entry.removed = true; };
+    return entry;
+}
+
+function collectValues(valueRows) {
+    const values = [];
+    valueRows.forEach(vr => {
+        if (vr.removed) return;
+        const { k, v } = vr.get();
+        if (k && !isNaN(v)) values.push({ k, v });
+    });
+    return values;
 }
 
 // --- Tag Input Component ---
